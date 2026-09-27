@@ -17,8 +17,12 @@ if (!isset($_SESSION['user_id'])) {
 }
 
 $user_id = (int)$_SESSION['user_id'];
-$user_role = $_SESSION['role'] ?? 'USER';
-$store_name = $_SESSION['store_name'] ?? '내 매장';
+$user_role =$_SESSION['role'] ?? 'USER';
+$store_name =$_SESSION['store_name'] ?? '내 매장';
+
+if (empty($_SESSION['csrf_token'])) {$_SESSION['csrf_token'] = bin2hex(random_bytes(32));
+}
+$csrf_token =$_SESSION['csrf_token'];
 
 try {
     $pdo->exec("
@@ -37,11 +41,15 @@ try {
     ");
 } catch (PDOException $e) {}
 
-$kepco_base_rate = 145.2; // 일반용(갑) 저압 전력량 요금 기준(원/kWh)
+$kepco_base_rate = 145.2;
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
-    if ($user_role === 'USER') {
-        $_SESSION['flash_err'] = '일반회원은 광열비 등록 권한이 없습니다.';
+    if (!hash_equals($_SESSION['csrf_token'] ?? '', $_POST['csrf_token'] ?? '')) {$_SESSION['flash_err'] = '비정상적인 접근이거나 세션이 만료되었습니다.';
+        header("Location: utility_cost.htm");
+        exit;
+    }
+
+    if ($user_role === 'USER') {$_SESSION['flash_err'] = '일반회원은 광열비 등록 권한이 없습니다.';
         header("Location: utility_cost.htm");
         exit;
     }
@@ -51,25 +59,22 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         $elec = max(0, intval($_POST['electric_cost'] ?? 0));
         $gas = max(0, intval($_POST['gas_cost'] ?? 0));
         $water = max(0, intval($_POST['water_cost'] ?? 0));
-        $total = $elec + $gas + $water;
+        $total =$elec + $gas +$water;
 
-        // 직전월 대비 이상 급증 분석
-        $prev_stmt = $pdo->prepare("SELECT electric_cost, gas_cost FROM store_utility_bills WHERE user_id = ? AND bill_month < ? ORDER BY bill_month DESC LIMIT 1");
-        $prev_stmt->execute([$user_id, $b_month]);
-        $prev = $prev_stmt->fetch(PDO::FETCH_ASSOC);
+        $prev_stmt =$pdo->prepare("SELECT electric_cost, gas_cost FROM store_utility_bills WHERE user_id = ? AND bill_month < ? ORDER BY bill_month DESC LIMIT 1");
+        $prev_stmt->execute([$user_id,$b_month]);
+        $prev =$prev_stmt->fetch(PDO::FETCH_ASSOC);
 
         $leak_warn = "한전 일반용(갑) 표준 요율 대비 정상 소비 범위입니다.";
-        if ($prev) {
-            $e_diff = $elec - (int)$prev['electric_cost'];
+        if ($prev) {$e_diff = $elec - (int)$prev['electric_cost'];
             if ($e_diff > 150000) {
                 $leak_warn = "직전월 대비 전기요금이 " . number_format($e_diff) . "원 급증했습니다! 에어컨 실외기 먼지 및 콤프레셔 누전 점검이 시급합니다.";
-            } elseif ($gas - (int)$prev['gas_cost'] > 100000) {
-                $leak_warn = "가스요금이 전월 대비 대폭 상승했습니다. 온수기 누수 및 화구 불완전연소를 점검하세요.";
+            } elseif ($gas - (int)$prev['gas_cost'] > 100000) {$leak_warn = "가스요금이 전월 대비 대폭 상승했습니다. 온수기 누수 및 화구 불완전연소를 점검하세요.";
             }
         }
 
         try {
-            $stmt = $pdo->prepare("
+            $stmt =$pdo->prepare("
                 INSERT INTO store_utility_bills 
                 (user_id, bill_month, electric_cost, gas_cost, water_cost, total_cost, ai_leak_warning) 
                 VALUES (?, ?, ?, ?, ?, ?, ?)
@@ -80,19 +85,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                     total_cost = VALUES(total_cost),
                     ai_leak_warning = VALUES(ai_leak_warning)
             ");
-            $stmt->execute([$user_id, $b_month, $elec, $gas, $water, $total, $leak_warn]);
+            $stmt->execute([$user_id, $b_month,$elec, $gas,$water, $total,$leak_warn]);
             $_SESSION['flash_msg'] = "{$b_month} 청구 광열비가 저장되었습니다.";
-        } catch (PDOException $e) {
-            $_SESSION['flash_err'] = '광열비 저장 중 오류가 발생했습니다.';
+        } catch (PDOException $e) {$_SESSION['flash_err'] = '광열비 저장 중 오류가 발생했습니다.';
         }
     } elseif ($_POST['action'] === 'delete_bill') {
         $del_id = intval($_POST['bill_id'] ?? 0);
         try {
-            $del = $pdo->prepare("DELETE FROM store_utility_bills WHERE id = ? AND user_id = ?");
-            $del->execute([$del_id, $user_id]);
-            $_SESSION['flash_msg'] = '선택하신 고지서 내역이 삭제되었습니다.';
-        } catch (PDOException $e) {
-            $_SESSION['flash_err'] = '삭제 처리 중 오류가 발생했습니다.';
+            $del =$pdo->prepare("DELETE FROM store_utility_bills WHERE id = ? AND user_id = ?");
+            $del->execute([$del_id, $user_id]);$_SESSION['flash_msg'] = '선택하신 고지서 내역이 삭제되었습니다.';
+        } catch (PDOException $e) {$_SESSION['flash_err'] = '삭제 처리 중 오류가 발생했습니다.';
         }
     }
 
@@ -100,19 +102,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
     exit;
 }
 
-$flash_msg = $_SESSION['flash_msg'] ?? '';
-$flash_err = $_SESSION['flash_err'] ?? '';
-unset($_SESSION['flash_msg'], $_SESSION['flash_err']);
+$flash_msg =$_SESSION['flash_msg'] ?? '';
+$flash_err =$_SESSION['flash_err'] ?? '';
+unset($_SESSION['flash_msg'],$_SESSION['flash_err']);
 
 $bills = [];
 try {
-    $stmt = $pdo->prepare("SELECT * FROM store_utility_bills WHERE user_id = ? ORDER BY bill_month DESC LIMIT 12");
+    $stmt =$pdo->prepare("SELECT * FROM store_utility_bills WHERE user_id = ? ORDER BY bill_month DESC LIMIT 12");
     $stmt->execute([$user_id]);
-    $bills = $stmt->fetchAll(PDO::FETCH_ASSOC);
+    $bills =$stmt->fetchAll(PDO::FETCH_ASSOC);
 } catch (PDOException $e) {}
 
-if (empty($bills)) {
-    $bills = [
+if (empty($bills)) {$bills = [
         [
             'id' => 0, 'bill_month' => date('Y-m'),
             'electric_cost' => 420000, 'gas_cost' => 280000, 'water_cost' => 65000,
@@ -156,6 +157,13 @@ require_once 'header.php';
     </div>
 <?php endif; ?>
 
+<?php if ($flash_err): ?>
+    <div class="alert alert-danger alert-dismissible fade show rounded-3 mb-4 shadow-sm small" role="alert">
+        <i class="fa-solid fa-triangle-exclamation me-2 text-danger"></i><?= htmlspecialchars($flash_err) ?>
+        <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+    </div>
+<?php endif; ?>
+
 <div class="row mb-4">
     <div class="col-12">
         <div class="glass-card p-4">
@@ -174,7 +182,7 @@ require_once 'header.php';
                         </tr>
                     </thead>
                     <tbody class="small">
-                        <?php foreach ($bills as $b): ?>
+                        <?php foreach ($bills as$b): ?>
                             <tr>
                                 <td class="fw-bold text-dark"><?= htmlspecialchars($b['bill_month']) ?></td>
                                 <td class="text-end text-muted"><?= number_format($b['electric_cost']) ?>원</td>
@@ -186,11 +194,9 @@ require_once 'header.php';
                                 </td>
                                 <td class="text-center">
                                     <?php if ($user_role !== 'USER' && !empty($b['id'])): ?>
-                                        <form method="POST" action="utility_cost.htm" class="d-inline" onsubmit="return confirm('고지서 내역을 삭제하시겠습니까?');">
-                                            <input type="hidden" name="action" value="delete_bill">
-                                            <input type="hidden" name="bill_id" value="<?= (int)$b['id'] ?>">
-                                            <button type="submit" class="btn btn-outline-danger btn-sm rounded-pill px-2 py-0"><i class="fa-solid fa-trash-can"></i></button>
-                                        </form>
+                                        <button type="button" class="btn btn-outline-danger btn-sm rounded-pill px-2 py-0" onclick="triggerDeleteBill(<?= (int)$b['id'] ?>, '<?= htmlspecialchars(addslashes($b['bill_month'])) ?>')" title="삭제">
+                                            <i class="fa-solid fa-trash-can"></i>
+                                        </button>
                                     <?php else: ?>
                                         <span class="text-muted">-</span>
                                     <?php endif; ?>
@@ -204,12 +210,38 @@ require_once 'header.php';
     </div>
 </div>
 
+<!-- 삭제 확인 모달 -->
+<div class="modal fade" id="deleteBillModal" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered modal-sm">
+        <div class="modal-content border-0 shadow-lg rounded-4 overflow-hidden">
+            <div class="modal-header bg-danger text-white py-2 px-3">
+                <h6 class="modal-title fw-bold fs-6"><i class="fa-solid fa-trash-can me-1"></i>고지서 내역 삭제</h6>
+                <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+            </div>
+            <form method="POST" action="utility_cost.htm">
+                <input type="hidden" name="action" value="delete_bill">
+                <input type="hidden" name="csrf_token" value="<?= htmlspecialchars($csrf_token) ?>">
+                <input type="hidden" name="bill_id" id="deleteModalBillId" value="">
+                <div class="modal-body p-3 text-center">
+                    <p class="mb-1 text-dark fw-bold" id="deleteModalBillText">고지서 내역을 삭제하시겠습니까?</p>
+                    <small class="text-muted">삭제 시 대장에서 즉시 제거됩니다.</small>
+                </div>
+                <div class="modal-footer bg-light py-2 px-3 justify-content-center">
+                    <button type="button" class="btn btn-secondary btn-sm rounded-pill px-3" data-bs-dismiss="modal">취소</button>
+                    <button type="submit" class="btn btn-danger btn-sm rounded-pill px-3 fw-bold">삭제 확정</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
 <?php if ($user_role !== 'USER'): ?>
 <div class="modal fade" id="addBillModal" tabindex="-1" aria-hidden="true">
     <div class="modal-dialog modal-dialog-centered">
         <div class="modal-content border-0 shadow-lg rounded-4 overflow-hidden">
             <form method="POST" action="utility_cost.htm">
                 <input type="hidden" name="action" value="save_bill">
+                <input type="hidden" name="csrf_token" value="<?= htmlspecialchars($csrf_token) ?>">
                 <div class="modal-header bg-primary text-white py-3 px-4">
                     <h5 class="modal-title fs-6 fw-bold text-white"><i class="fa-solid fa-bolt me-2"></i>월별 광열비 고지서 등록</h5>
                     <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
@@ -241,6 +273,16 @@ require_once 'header.php';
     </div>
 </div>
 <?php endif; ?>
+
+<script>
+function triggerDeleteBill(id, month) {
+    document.getElementById('deleteModalBillId').value = id;
+    document.getElementById('deleteModalBillText').innerText = `"${month}" 고지서 내역을 삭제하시겠습니까?`;
+    if (typeof bootstrap !== 'undefined') {
+        new bootstrap.Modal(document.getElementById('deleteBillModal')).show();
+    }
+}
+</script>
 
 <?php
 include_once 'footer.php';
