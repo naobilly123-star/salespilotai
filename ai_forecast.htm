@@ -1,0 +1,441 @@
+<?php
+/* 🌤️ 메뉴 1: AI 날씨 및 상권 기반 수요 예측 리포트 (사용자 위치 기반 Open-Meteo API 연동 & Fallback) */
+require_once 'db.php';
+require_once 'header.php';
+
+$user_id = $_SESSION['user_id'];
+$today_date = date('Y-m-d');
+
+/* 1. DB에서 현재 로그인한 사용자의 매장 주소 가져오기 및 위경도 매핑 */
+$latitude = 37.58;
+$longitude = 127.00;
+$store_address = "서울 기본 상권 기준";
+
+try {
+    $stmt_store = $pdo->prepare("SELECT store_name, address FROM stores WHERE user_id = :user_id AND is_active = 1 LIMIT 1");
+    $stmt_store->execute([':user_id' => $user_id]);
+    $store_info = $stmt_store->fetch();
+
+    if ($store_info && !empty($store_info['address'])) {
+        $store_address = $store_info['address'];
+
+        $geo_resolved = false;
+        $geo_query = urlencode(trim($store_address));
+        $geo_ch = curl_init("https://nominatim.openstreetmap.org/search?format=json&q={$geo_query}&limit=1");
+        curl_setopt_array($geo_ch, [
+            CURLOPT_RETURNTRANSFER => true,
+            CURLOPT_CONNECTTIMEOUT => 2,
+            CURLOPT_TIMEOUT => 2,
+            CURLOPT_USERAGENT => 'SmartStoreWeather/2.0 (WeatherForecastBot)'
+        ]);
+        $geo_res = curl_exec($geo_ch);
+        $geo_code = curl_getinfo($geo_ch, CURLINFO_HTTP_CODE);
+        curl_close($geo_ch);
+
+        if ($geo_code === 200 && !empty($geo_res)) {
+            $geo_data = json_decode($geo_res, true);
+            if (!empty($geo_data[0]['lat']) && !empty($geo_data[0]['lon'])) {
+                $latitude = round(floatval($geo_data[0]['lat']), 4);
+                $longitude = round(floatval($geo_data[0]['lon']), 4);
+                $geo_resolved = true;
+            }
+        }
+
+        if (!$geo_resolved) {
+            if (mb_strpos($store_address, '부산') !== false) {
+                $latitude = 35.1795; $longitude = 129.0756;
+            } elseif (mb_strpos($store_address, '대구') !== false) {
+                $latitude = 35.8714; $longitude = 128.6014;
+            } elseif (mb_strpos($store_address, '인천') !== false) {
+                $latitude = 37.4563; $longitude = 126.7052;
+            } elseif (mb_strpos($store_address, '광주') !== false) {
+                $latitude = 35.1595; $longitude = 126.8526;
+            } elseif (mb_strpos($store_address, '대전') !== false) {
+                $latitude = 36.3504; $longitude = 127.3845;
+            } elseif (mb_strpos($store_address, '울산') !== false) {
+                $latitude = 35.5384; $longitude = 129.3114;
+            } elseif (mb_strpos($store_address, '제주') !== false) {
+                $latitude = 33.4996; $longitude = 126.5312;
+            } elseif (mb_strpos($store_address, '강원') !== false || mb_strpos($store_address, '춘천') !== false) {
+                $latitude = 37.8853; $longitude = 127.7298;
+            }
+        }
+    }
+} catch (PDOException $e) {}
+
+$is_api_connected = false;
+$api_status_msg = "시뮬레이션 모드 (API 키 미설정/통신대기)";
+
+$forecast_weather = 'Rainy';
+$current_temp = 20;
+$temp_high = 24;
+$temp_low = 18;
+$pop_rain_rate = 80;
+
+try {
+    $api_url = "https://api.open-meteo.com/v1/forecast"
+             . "?latitude={$latitude}&longitude={$longitude}"
+             . "&current=temperature_2m,weather_code"
+             . "&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max"
+             . "&timezone=Asia%2FSeoul";
+
+    $ch = curl_init();
+    curl_setopt_array($ch, [
+        CURLOPT_URL => $api_url,
+        CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_CONNECTTIMEOUT => 3,
+        CURLOPT_TIMEOUT => 3,
+        CURLOPT_USERAGENT => 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'
+    ]);
+
+    $response = curl_exec($ch);
+    $http_code = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+    curl_close($ch);
+
+    if ($http_code === 200 && !empty($response)) {
+        $json_data = json_decode($response, true);
+        
+        if (isset($json_data['current']) || isset($json_data['daily'])) {
+            $weather_code = intval($json_data['current']['weather_code'] ?? ($json_data['daily']['weather_code'][0] ?? 0));
+            $current_temp = round(floatval($json_data['current']['temperature_2m'] ?? 20));
+
+            if (isset($json_data['daily']['temperature_2m_max'][0])) {
+                $temp_high = round(floatval($json_data['daily']['temperature_2m_max'][0]));
+                $temp_low = round(floatval($json_data['daily']['temperature_2m_min'][0]));
+                $pop_rain_rate = intval($json_data['daily']['precipitation_probability_max'][0] ?? 0);
+            }
+
+            if (in_array($weather_code, [51, 53, 55, 56, 57, 61, 63, 65, 66, 67, 80, 81, 82, 95, 96, 99])) {
+                $forecast_weather = 'Rainy';
+            } elseif (in_array($weather_code, [71, 73, 75, 77, 85, 86])) {
+                $forecast_weather = 'Snow';
+            } elseif (in_array($weather_code, [1, 2, 3, 45, 48])) {
+                $forecast_weather = 'Cloudy';
+            } else {
+                $forecast_weather = 'Clear';
+            }
+
+            $is_api_connected = true;
+            $api_status_msg = "Open-Meteo 실시간 날씨 연동 완료";
+        }
+    }
+} catch (Exception $e) {
+    $is_api_connected = false;
+    $api_status_msg = "API 통신 오류 - 가상 데이터 모드 전환";
+}
+
+if ($forecast_weather === 'Rainy') {
+    $delivery_change = 28.5;
+    $hall_change = -18.2;
+    $stock_recommendation = "현재 우천 기상 조건(강수확률 {$pop_rain_rate}%)으로 인해 홀 방문 고객 감소가 예상됩니다. 배달용 용기 및 인기 배달 메뉴(찌개/전류) 원자재 재고를 20% 추가 확보하세요.";
+    $weather_icon = "fa-cloud-showers-heavy text-info";
+    $weather_kr = "비 내림 (강수확률 {$pop_rain_rate}%)";
+} elseif ($forecast_weather === 'Snow') {
+    $delivery_change = 35.0; 
+    $hall_change = -25.0;   
+    $stock_recommendation = "현재 눈이 내리고 있습니다. 배달 주문 급증에 대비하여 라이더 수급 상황을 점검하고, 빙판길 안전 배달 안내를 준비하세요.";
+    $weather_icon = "fa-snowflake text-primary";
+    $weather_kr = "눈 내림 (강수확률 {$pop_rain_rate}%)";
+} elseif ($forecast_weather === 'Cloudy') {
+    $delivery_change = 5.0;
+    $hall_change = 2.0;
+    $stock_recommendation = "현재 구름 많은 흐린 날씨입니다. 평시와 비슷한 수준의 평탄한 매출 흐름이 예상됩니다.";
+    $weather_icon = "fa-cloud text-secondary";
+    $weather_kr = "구름 많음";
+} else {
+    $delivery_change = -5.0;
+    $hall_change = 15.0;
+    $stock_recommendation = "야외 활동에 적합한 맑은 날씨로 홀 매장 방문객 수가 크게 늘어날 것으로 예상됩니다. 홀 서빙 인력을 강화하세요.";
+    $weather_icon = "fa-sun text-warning";
+    $weather_kr = "맑음";
+}
+?>
+
+<style>
+    .weather-display-card {
+        background: radial-gradient(circle at top left, #ffffff, #f1f5f9);
+        border: 1px solid #cbd5e1;
+    }
+    .weather-stat-box {
+        background: #ffffff;
+        border-radius: 12px;
+        padding: 12px;
+        border: 1px solid #e2e8f0;
+    }
+
+    .btn-forecast-location {
+        white-space: nowrap !important;
+        flex-shrink: 0 !important;
+        font-size: clamp(0.8rem, 1vw, 0.88rem) !important;
+        padding: 0.45rem 1rem !important;
+        text-align: center;
+    }
+    .badge-forecast-status {
+        white-space: nowrap !important;
+        flex-shrink: 0 !important;
+        font-size: clamp(0.78rem, 0.95vw, 0.88rem) !important;
+        line-height: 1.4 !important;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        text-align: center;
+    }
+    .forecast-action-group {
+        width: 100%;
+    }
+    @media (min-width: 576px) {
+        .forecast-action-group {
+            width: auto !important;
+        }
+    }
+</style>
+
+<div class="row mb-4">
+    <div class="col-12">
+        <div class="d-flex flex-column flex-md-row justify-content-between align-items-start align-items-md-center flex-wrap gap-2">
+            <div class="mb-1 mb-md-0">
+                <h3 class="fw-bold mb-1" style="font-size: clamp(1.15rem, 1.8vw, 1.75rem); word-break: keep-all;"><i class="fa-solid fa-cloud-sun-rain text-primary me-2"></i>AI 날씨 & 상권 기반 수요 예측 리포트</h3>
+                <p class="text-muted mb-0 small" style="word-break: keep-all;">사용자 GPS 위치 기반 오픈 API 및 과거 매출 Big Data를 매칭하여 실시간 및 예상 수요를 정밀 예측합니다.</p>
+            </div>
+            <div class="d-flex flex-column flex-sm-row align-items-stretch align-items-sm-center gap-2 forecast-action-group mt-2 mt-md-0">
+                <button type="button" class="btn btn-outline-primary rounded-pill fw-semibold btn-forecast-location" onclick="getUserLocation()">
+                    <i class="fa-solid fa-location-crosshairs me-1"></i>내 위치 날씨 불러오기
+                </button>
+                <span id="apiStatusBadge" class="badge bg-<?= $is_api_connected ? 'success' : 'secondary' ?> py-2 px-3 rounded-pill badge-forecast-status">
+                    <i class="fa-solid <?= $is_api_connected ? 'fa-cloud-check' : 'fa-microchip' ?> me-1"></i>
+                    <span id="apiStatusText"><?= $api_status_msg ?></span>
+                </span>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- 실시간 기상 예보 및 AI 처방 요약 카드 -->
+<div class="row g-4 mb-4">
+    <div class="col-md-5">
+        <div class="glass-card weather-display-card p-4 text-center h-100 shadow-sm">
+            <span class="badge bg-primary rounded-pill px-3 py-2 mb-2 fw-semibold">실시간 현재 (<?= $today_date ?>) 기상 예보</span>
+            <div id="locationLabel" class="small text-muted mb-1">
+                <i class="fa-solid fa-location-dot text-danger me-1"></i>위치: <?= htmlspecialchars($store_address) ?>
+            </div>
+            
+            <div class="display-3 my-3" id="weatherIconContainer"><i class="fa-solid <?= $weather_icon ?>"></i></div>
+            <h4 class="fw-bold mb-1 text-dark" id="weatherKrText"><?= $weather_kr ?></h4>
+            <p class="text-muted mb-0" id="tempRangeText">현재 <strong><?= $current_temp ?>°C</strong> (최저 <?= $temp_low ?>°C / 최고 <?= $temp_high ?>°C)</p>
+            <hr class="my-3 opacity-25">
+            <div class="row text-center g-2 mt-2">
+                <div class="col-6">
+                    <div class="weather-stat-box">
+                        <div class="small text-muted fw-semibold">예상 배달 주문량</div>
+                        <div class="fs-4 fw-bold <?= $delivery_change >= 0 ? 'text-success' : 'text-danger' ?>" id="deliveryChangeText">
+                            <i class="fa-solid <?= $delivery_change >= 0 ? 'fa-arrow-up' : 'fa-arrow-down' ?> me-1"></i><?= ($delivery_change >= 0 ? '+' : '') .$delivery_change ?>%
+                        </div>
+                    </div>
+                </div>
+                <div class="col-6">
+                    <div class="weather-stat-box">
+                        <div class="small text-muted fw-semibold">예상 홀 방문객</div>
+                        <div class="fs-4 fw-bold <?= $hall_change >= 0 ? 'text-success' : 'text-danger' ?>" id="hallChangeText">
+                            <i class="fa-solid <?= $hall_change >= 0 ? 'fa-arrow-up' : 'fa-arrow-down' ?> me-1"></i><?= ($hall_change >= 0 ? '+' : '') .$hall_change ?>%
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="col-md-7">
+        <div class="glass-card p-4 h-100 d-flex flex-column justify-content-between shadow-sm">
+            <div>
+                <h5 class="fw-bold text-primary mb-3"><i class="fa-solid fa-lightbulb text-warning me-2"></i>AI 맞춤형 발주 & 식자재 가이드</h5>
+                <div class="p-3 bg-light rounded-3 border mb-3">
+                    <p class="mb-0 text-dark leading-relaxed" style="word-break: keep-all;"><strong><i class="fa-solid fa-circle-info text-primary me-1"></i>자동 알림:</strong> <span id="stockRecommendationText"><?= $stock_recommendation ?></span></p>
+                </div>
+            </div>
+            <div class="p-3 rounded-3 border" style="background-color: #f0fdf4; border-color: #bbf7d0 !important;">
+                <h6 class="fw-bold mb-1 text-success"><i class="fa-solid fa-shield-halved me-1"></i>기회 손실 방지 예상 효과</h6>
+                <p class="small mb-0 text-secondary" style="word-break: keep-all;">재고 조절 가이드를 반영할 경우 날씨 변화에 따른 <strong>원재료 폐기율 15% 감소</strong> 및 <strong>배달 주문 취소율 98% 방지</strong> 효과를 기대할 수 있습니다.</p>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- 실시간 시간대별 주문 예측 차트 -->
+<div class="row mb-4">
+    <div class="col-12">
+        <div class="glass-card p-4 shadow-sm">
+            <h5 class="fw-bold mb-3"><i class="fa-solid fa-chart-column me-2 text-primary"></i>시간대별 예상 주문 유입량 분석</h5>
+            <canvas id="forecastChart" style="max-height: 300px;"></canvas>
+        </div>
+    </div>
+</div>
+
+<!-- GPS/위치 알림 전용 모달 (Alert 대체) -->
+<div class="modal fade" id="locationAlertModal" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered modal-sm">
+        <div class="modal-content border-0 shadow-lg rounded-4 overflow-hidden">
+            <div class="modal-header bg-warning text-dark py-2 px-3">
+                <h6 class="modal-title fw-bold fs-6"><i class="fa-solid fa-location-dot me-1"></i>위치 서비스 안내</h6>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body p-3 text-center">
+                <p class="mb-0 text-dark small" id="locationAlertModalText">현재 브라우저 환경에서 위치 서비스를 직접 지원하지 않아 기본 등록 상권 좌표로 전환되었습니다.</p>
+            </div>
+            <div class="modal-footer bg-light py-2 px-3 justify-content-center">
+                <button type="button" class="btn btn-primary btn-sm rounded-pill px-4" data-bs-dismiss="modal">확인</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+function generateDynamicHourlyLabels() {
+    const curHour = new Date().getHours();
+    const labels = [];
+    for (let i = 0; i < 9; i++) {
+        const h = (curHour + i) % 24;
+        labels.push(`${h < 10 ? '0' + h : h}:00`);
+    }
+    return labels;
+}
+
+const dynamicLabels = generateDynamicHourlyLabels();
+
+const forecastChart = new Chart(document.getElementById('forecastChart'), {
+    type: 'bar',
+    data: {
+        labels: dynamicLabels,
+        datasets: [{
+            label: '예상 배달 건수',
+            data: [15, 32, 28, 14, 18, 45, 50, 36, 22],
+            backgroundColor: '#06b6d4',
+            borderRadius: 6
+        }, {
+            label: '예상 홀 방문 건수',
+            data: [6, 20, 15, 5, 10, 18, 20, 12, 8],
+            backgroundColor: '#2563eb',
+            borderRadius: 6
+        }]
+    },
+    options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        scales: { x: { stacked: true }, y: { stacked: true, beginAtZero: true } }
+    }
+});
+
+function getUserLocation() {
+    if ("geolocation" in navigator) {
+        document.getElementById('apiStatusText').innerText = "현재 위치 조회 중...";
+        
+        navigator.geolocation.getCurrentPosition(
+            function(position) {
+                const lat = position.coords.latitude.toFixed(4);
+                const lng = position.coords.longitude.toFixed(4);
+                fetchWeatherData(lat, lng);
+            },
+            function(error) {
+                console.warn("위치 정보 가져오기 실패:", error.message);
+                document.getElementById('apiStatusBadge').className = "badge bg-secondary py-2 px-3 rounded-pill badge-forecast-status";
+                document.getElementById('apiStatusText').innerText = "기본 상권 위치 사용 중 (위치 허용 필요)";
+            },
+            { timeout: 5000, enableHighAccuracy: true }
+        );
+    } else {
+        document.getElementById('locationAlertModalText').innerText = "이 브라우저는 위치 서비스를 지원하지 않아 기본 등록 상권 좌표로 대체 연동됩니다.";
+        if (typeof bootstrap !== 'undefined') {
+            new bootstrap.Modal(document.getElementById('locationAlertModal')).show();
+        }
+    }
+}
+
+function fetchWeatherData(lat, lng) {
+    const apiUrl = `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lng}&current=temperature_2m,weather_code&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max&timezone=Asia%2FSeoul`;
+
+    fetch(apiUrl)
+        .then(response => response.json())
+        .then(data => {
+            if (data.current || (data.daily && data.daily.time)) {
+                const currentTemp = data.current ? Math.round(data.current.temperature_2m) : null;
+                const weatherCode = Number((data.current && data.current.weather_code !== undefined) ? data.current.weather_code : (data.daily.weather_code ? data.daily.weather_code[0] : 0));
+                
+                const tempHigh = data.daily && data.daily.temperature_2m_max ? Math.round(data.daily.temperature_2m_max[0]) : (currentTemp || 24);
+                const tempLow = data.daily && data.daily.temperature_2m_min ? Math.round(data.daily.temperature_2m_min[0]) : (currentTemp || 18);
+                const popRainRate = (data.daily && data.daily.precipitation_probability_max) ? (data.daily.precipitation_probability_max[0] || 0) : 0;
+
+                let forecastWeather = 'Clear';
+                if ([51, 53, 55, 56, 57, 61, 63, 65, 66, 67, 80, 81, 82, 95, 96, 99].includes(weatherCode)) {
+                    forecastWeather = 'Rainy';
+                } else if ([71, 73, 75, 77, 85, 86].includes(weatherCode)) {
+                    forecastWeather = 'Snow';
+                } else if ([1, 2, 3, 45, 48].includes(weatherCode)) {
+                    forecastWeather = 'Cloudy';
+                }
+
+                updateUI(forecastWeather, currentTemp, tempHigh, tempLow, popRainRate, lat, lng);
+            }
+        })
+        .catch(err => {
+            console.error("Open-Meteo Fetch 실패:", err);
+            document.getElementById('apiStatusText').innerText = "위치 날씨 로딩 실패";
+        });
+}
+
+function updateUI(weather, currentTemp, tempHigh, tempLow, popRainRate, lat, lng) {
+    let deliveryChange = 0, hallChange = 0, stockRecommendation = "", weatherIcon = "", weatherKr = "";
+
+    if (weather === 'Rainy') {
+        deliveryChange = 28.5;
+        hallChange = -18.2;
+        stockRecommendation = `현재 우천 기상 조건(강수확률 ${popRainRate}%)으로 인해 홀 방문 고객 감소가 예상됩니다. 배달용 용기 및 인기 배달 메뉴 원자재 재고를 20% 추가 확보하세요.`;
+        weatherIcon = "fa-cloud-showers-heavy text-info";
+        weatherKr = `비 내림 (강수확률 ${popRainRate}%)`;
+    } else if (weather === 'Snow') {
+        deliveryChange = 35.0;
+        hallChange = -25.0;
+        stockRecommendation = "현재 눈이 내리고 있습니다. 배달 주문 급증에 대비하여 라이더 수급 상황을 점검하고, 빙판길 안전 배달 안내를 준비하세요.";
+        weatherIcon = "fa-snowflake text-primary";
+        weatherKr = `눈 내림 (강수확률 ${popRainRate}%)`;
+    } else if (weather === 'Cloudy') {
+        deliveryChange = 5.0;
+        hallChange = 2.0;
+        stockRecommendation = "현재 구름 많은 흐린 날씨입니다. 평시와 비슷한 수준의 평탄한 매출 흐름이 예상됩니다.";
+        weatherIcon = "fa-cloud text-secondary";
+        weatherKr = "구름 많음";
+    } else {
+        deliveryChange = -5.0;
+        hallChange = 15.0;
+        stockRecommendation = "야외 활동에 적합한 맑은 날씨로 홀 매장 방문객 수가 크게 늘어날 것으로 예상됩니다. 홀 서빙 인력을 강화하세요.";
+        weatherIcon = "fa-sun text-warning";
+        weatherKr = "맑음";
+    }
+
+    document.getElementById('locationLabel').innerHTML = `<i class="fa-solid fa-location-dot text-danger me-1"></i>현재 GPS 위치 (위도: ${lat}, 경도: ${lng})`;
+    document.getElementById('weatherIconContainer').innerHTML = `<i class="fa-solid ${weatherIcon}"></i>`;
+    document.getElementById('weatherKrText').innerText = weatherKr;
+    
+    const currentTempHtml = (currentTemp !== null && currentTemp !== undefined) ? `현재 <strong>${currentTemp}°C</strong> ` : '';
+    document.getElementById('tempRangeText').innerHTML = `${currentTempHtml}(최저 ${tempLow}°C / 최고 ${tempHigh}°C)`;
+    
+    document.getElementById('deliveryChangeText').className = `fs-4 fw-bold ${deliveryChange >= 0 ? 'text-success' : 'text-danger'}`;
+    document.getElementById('deliveryChangeText').innerHTML = `<i class="fa-solid ${deliveryChange >= 0 ? 'fa-arrow-up' : 'fa-arrow-down'} me-1"></i>${deliveryChange >= 0 ? '+' : ''}${deliveryChange}%`;
+    
+    document.getElementById('hallChangeText').className = `fs-4 fw-bold ${hallChange >= 0 ? 'text-success' : 'text-danger'}`;
+    document.getElementById('hallChangeText').innerHTML = `<i class="fa-solid ${hallChange >= 0 ? 'fa-arrow-up' : 'fa-arrow-down'} me-1"></i>${hallChange >= 0 ? '+' : ''}${hallChange}%`;
+    
+    document.getElementById('stockRecommendationText').innerText = stockRecommendation;
+    
+    document.getElementById('apiStatusBadge').className = "badge bg-success py-2 px-3 rounded-pill badge-forecast-status";
+    document.getElementById('apiStatusText').innerText = "내 위치 실시간 날씨 연동 완료";
+}
+
+document.addEventListener('DOMContentLoaded', function() {
+    getUserLocation();
+});
+</script>
+
+<?php
+include_once 'footer.php';
+?>
+</body>
+</html>

@@ -1,0 +1,609 @@
+<?php
+/* ========================================================================== */
+/* 📱 메뉴 3: AI SNS 마케팅 홍보문구 자동 생성기 (OpenAI API 연동 & Fallback 기능) */
+/* ========================================================================== */
+if (session_status() === PHP_SESSION_NONE) {
+    session_start();
+}
+ob_start();
+
+require_once 'db.php';
+
+$user_id = $_SESSION['user_id'] ?? null;
+if (!$user_id) {
+    header("Location: login.htm");
+    exit();
+}
+
+$user_role = $_SESSION['role'] ?? 'USER';
+$store_name = $_SESSION['store_name'] ?? '내 매장';
+
+/* 세션 플래시 메시지 확인 및 초기화 */
+$flash_msg = $_SESSION['flash_msg'] ?? '';
+$flash_err = $_SESSION['flash_err'] ?? '';
+unset($_SESSION['flash_msg'], $_SESSION['flash_err']);
+
+// 1. SNS 카피 개별 삭제 처리
+if (isset($_GET['action']) && $_GET['action'] === 'delete' && isset($_GET['id'])) {
+    if ($user_role === 'USER') {
+        $_SESSION['flash_err'] = '삭제 권한이 없습니다. 사업자회원 승인이 필요합니다.';
+        header("Location: ai_sns_generator.htm");
+        exit();
+    }
+
+    $del_id = intval($_GET['id']);
+    try {
+        $stmt = $pdo->prepare("DELETE FROM ai_sns_copies WHERE id = ? AND user_id = ?");
+        $stmt->execute([$del_id, $user_id]);
+        $_SESSION['flash_msg'] = 'deleted';
+    } catch (PDOException $e) {
+        $_SESSION['flash_err'] = '삭제 처리 중 데이터베이스 예외가 발생했습니다.';
+    }
+
+    header("Location: ai_sns_generator.htm");
+    exit();
+}
+
+$is_generated = isset($_GET['success']) && $_GET['success'] == '1';
+$new_generated_id = isset($_GET['new_id']) ? intval($_GET['new_id']) : 0;
+
+$active_channels = [];
+$active_tones = [];
+
+try {
+    $cfg_stmt = $pdo->query("SELECT * FROM ai_sns_configs WHERE is_active = 1 ORDER BY id ASC");
+    $configs = $cfg_stmt->fetchAll(PDO::FETCH_ASSOC);
+    foreach ($configs as $cfg) {
+        if ($cfg['type'] === 'CHANNEL') {
+            $active_channels[$cfg['code']] = $cfg['name'];
+        } elseif ($cfg['type'] === 'TONE') {
+            $active_tones[$cfg['code']] = $cfg['name'];
+        }
+    }
+} catch (Exception $e) {}
+
+if (empty($active_channels)) {
+    $active_channels = [
+        'instagram' => '인스타그램 (감성/이미지 중심)',
+        'daangn'    => '당근마켓 (지역 이웃 친화적)',
+        'review'    => '배달앱/네이버 리뷰 답글',
+        'blog'      => '네이버 블로그 (상세 매장 소개)',
+        'kakaotalk' => '카카오톡 채널 (쿠폰 및 소식)'
+    ];
+}
+if (empty($active_tones)) {
+    $active_tones = [
+        'friendly'     => '친근하고 다정한 어조',
+        'professional' => '전문적이고 신뢰감 있는 어조',
+        'witty'        => '위트 있고 재치 있는 어조',
+        'urgent'       => '긴박하고 혜택을 강조하는 어조',
+        'emotional'    => '감성적이고 따뜻한 어조'
+    ];
+}
+
+// 2. 신규 SNS 홍보문구 생성 처리
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['generate_sns'])) {
+    if ($user_role === 'USER') {
+        $_SESSION['flash_err'] = '생성 권한이 없습니다. 사업자회원 승인 후 이용 가능합니다.';
+        header("Location: ai_sns_generator.htm");
+        exit();
+    }
+
+    $platform = $_POST['platform'] ?? 'instagram';
+    $tone = $_POST['tone'] ?? 'friendly';
+    $keywords = trim($_POST['keywords'] ?? '신메뉴 출시 할인 이벤트');
+
+    $platform_kr = $active_channels[$platform] ?? $platform;
+    $tone_kr = $active_tones[$tone] ?? $tone;
+
+    $sample_texts = [
+        'instagram' => [
+            'text' => "✨ [{$store_name} 특별 소식!]\n\n오늘처럼 기분 좋은 날, 특별한 맛과 분위기를 선물해 드릴게요! 🍽️\n정성껏 준비한 혜택을 만나보세요. (주요 안내: {$keywords}) 🎉",
+            'tags' => "#{$store_name} #동네맛집 #인스타맛집 #일상소통 #핫플레이스"
+        ],
+        'daangn' => [
+            'text' => "안녕하세요 이웃님들! {$store_name}입니다. 🧡\n우리 동네 이웃분들을 위해 작은 혜택과 정성을 준비했습니다: {$keywords}\n부담 없이 편하게 들러주세요!",
+            'tags' => "#당근단골 #동네가게 #이웃소통 #{$store_name}"
+        ],
+        'review' => [
+            'text' => "안녕하세요 소중한 고객님, {$store_name}입니다! 😊\n정성 가득한 리뷰를 남겨주셔서 진심으로 감사드립니다. 말씀해주신 부분({$keywords}) 잊지 않고 늘 한결같은 정성으로 모시겠습니다. 늘 건강하세요!",
+            'tags' => ""
+        ]
+    ];
+
+    $final_res = $sample_texts[$platform] ?? [
+        'text' => "✨ [{$store_name} 안내]\n\n안녕하세요! {$store_name}입니다. 😊\n고객님들을 위해 준비한 소식입니다: {$keywords}\n오늘도 행복하고 따뜻한 하루 보내세요!",
+        'tags' => "#{$store_name} #이벤트 #일상"
+    ];
+    $is_api_success = false;
+
+    $db_setting_key = '';
+    try {
+        $st_query = $pdo->query("SELECT setting_value FROM site_settings WHERE setting_key = 'api_openai_key' LIMIT 1");
+        if ($st_query) {
+            $db_setting_key = trim($st_query->fetchColumn() ?: '');
+        }
+    } catch (PDOException $e) {}
+
+    $default_key = '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';
+    $api_key = !empty($db_setting_key) ? $db_setting_key : (getenv('OPENAI_API_KEY') ?: ($_ENV['OPENAI_API_KEY'] ?? $default_key));
+
+    if (!empty($api_key)) {
+        $prompt = "가게명: '{$store_name}'\n"
+                . "플랫폼: {$platform_kr}\n"
+                . "어조: {$tone_kr}\n"
+                . "주요 키워드: {$keywords}\n\n"
+                . "위 정보를 바탕으로 소상공인을 위한 SNS 마케팅 홍보문구와 타깃 해시태그를 생성해줘.\n"
+                . "반드시 아래 JSON 포맷으로만 답변해줘:\n"
+                . "{\n"
+                . "  \"text\": \"홍보문구 본문 내용 (줄바꿈 포함)\",\n"
+                . "  \"tags\": \"#해시태그1 #해시태그2 #해시태그3\"\n"
+                . "}";
+
+        $post_data = [
+            'model' => 'gpt-4o-mini',
+            'messages' => [
+                ['role' => 'system', 'content' => 'You are an expert AI Social Media Copywriter for small business owners in South Korea. Respond ONLY in valid JSON format.'],
+                ['role' => 'user', 'content' => $prompt]
+            ],
+            'response_format' => ['type' => 'json_object'],
+            'temperature' => 0.8
+        ];
+
+        $ch = curl_init('https://api.openai.com/v1/chat/completions');
+        curl_setopt_array($ch, [
+            CURLOPT_RETURNTRANSFER => true,
+            CURLOPT_POST => true,
+            CURLOPT_POSTFIELDS => json_encode($post_data),
+            CURLOPT_HTTPHEADER => [
+                'Content-Type: application/json',
+                'Authorization: Bearer ' . $api_key
+            ],
+            CURLOPT_TIMEOUT => 15,
+            CURLOPT_SSL_VERIFYPEER => false
+        ]);
+
+        $response = curl_exec($ch);
+        $http_code = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        curl_close($ch);
+
+        if ($http_code === 200 && $response) {
+            $json_res = json_decode($response, true);
+            if (isset($json_res['choices'][0]['message']['content'])) {
+                $content = json_decode($json_res['choices'][0]['message']['content'], true);
+                if (isset($content['text'])) {
+                    $final_res = [
+                        'text' => trim($content['text']),
+                        'tags' => trim($content['tags'] ?? '')
+                    ];
+                    $is_api_success = true;
+                }
+            }
+        }
+    }
+
+    $inserted_id = 0;
+    try {
+        $stmt = $pdo->prepare("INSERT INTO ai_sns_copies (user_id, platform, tone, generated_text, hashtags) VALUES (?, ?, ?, ?, ?)");
+        $stmt->execute([$user_id, $platform, $tone, $final_res['text'], $final_res['tags']]);
+        $inserted_id = (int)$pdo->lastInsertId();
+        $_SESSION['flash_msg'] = 'generated';
+    } catch (Exception $e) {
+        $_SESSION['flash_err'] = '생성 내용 저장 중 데이터베이스 오류가 발생했습니다.';
+    }
+
+    header("Location: ai_sns_generator.htm?success=1&new_id={$inserted_id}" . ($is_api_success ? "&api=1" : ""));
+    exit();
+}
+
+require_once 'header.php';
+
+$stmt_history = $pdo->prepare("SELECT * FROM ai_sns_copies WHERE user_id = ? ORDER BY id DESC");
+$stmt_history->execute([$user_id]);
+$history_list = $stmt_history->fetchAll(PDO::FETCH_ASSOC);
+
+$latest_copy = !empty($history_list) ? $history_list[0] : null;
+
+$show_latest_new = false;
+if (!empty($latest_copy)) {
+    if ($new_generated_id > 0 && (int)$latest_copy['id'] === $new_generated_id) {
+        $show_latest_new = true;
+    } elseif ($is_generated) {
+        $show_latest_new = true;
+    }
+}
+?>
+
+<style>
+    #loadingOverlay {
+        position: fixed;
+        top: 0;
+        left: 0;
+        width: 100vw;
+        height: 100vh;
+        background-color: rgba(15, 23, 42, 0.7);
+        backdrop-filter: blur(6px);
+        z-index: 99999;
+        display: none;
+        flex-direction: column;
+        justify-content: center;
+        align-items: center;
+        color: #ffffff;
+    }
+    .copy-textarea {
+        background-color: #f8fafc;
+        border: 1px solid #e2e8f0;
+        border-radius: 12px;
+        line-height: 1.65;
+        font-size: 0.92rem;
+        transition: border-color 0.2s;
+    }
+    .copy-textarea:focus {
+        background-color: #ffffff;
+    }
+    .sns-header-wrap {
+        display: flex;
+        flex-direction: column;
+        gap: 0.5rem;
+    }
+    @media (min-width: 768px) {
+        .sns-header-wrap {
+            flex-direction: row;
+            justify-content: space-between;
+            align-items: center;
+        }
+    }
+    .sns-title-responsive {
+        font-size: clamp(1.1rem, 1.8vw, 1.7rem) !important;
+        word-break: keep-all !important;
+        line-height: 1.3 !important;
+    }
+    .sns-desc-responsive {
+        font-size: clamp(0.82rem, 1vw, 0.9rem) !important;
+        word-break: keep-all !important;
+        line-height: 1.4 !important;
+    }
+    .sns-badge-responsive {
+        white-space: nowrap !important;
+        flex-shrink: 0;
+        font-size: clamp(0.78rem, 0.9vw, 0.88rem) !important;
+        display: inline-flex;
+        align-items: center;
+    }
+    .btn-action-responsive {
+        white-space: nowrap !important;
+        font-size: clamp(0.8rem, 1vw, 0.9rem) !important;
+    }
+    @media (max-width: 575.98px) {
+        .sns-card-footer {
+            flex-direction: column !important;
+            align-items: flex-start !important;
+            gap: 8px !important;
+        }
+        .sns-card-footer button {
+            width: 100% !important;
+        }
+        .sns-card-footer small {
+            width: 100% !important;
+            text-align: right;
+        }
+    }
+</style>
+
+<div id="loadingOverlay">
+    <div class="spinner-border text-light mb-3" style="width: 3.5rem; height: 3.5rem;" role="status">
+        <span class="visually-hidden">Loading...</span>
+    </div>
+    <h4 class="fw-bold mb-1"><i class="fa-solid fa-wand-magic-sparkles text-warning me-2"></i>AI가 SNS 홍보문구를 작성하는 중입니다...</h4>
+    <p class="text-light-50 small mb-0">인기 키워드와 플랫폼 트렌드를 적용 중입니다.</p>
+</div>
+
+<div class="row mb-3 mb-md-4">
+    <div class="col-12">
+        <div class="sns-header-wrap">
+            <div>
+                <h3 class="fw-bold mb-1 sns-title-responsive"><i class="fa-solid fa-hashtag text-primary me-2"></i>AI SNS 마케팅 홍보문구 자동 생성기</h3>
+                <p class="text-muted mb-0 sns-desc-responsive">플랫폼별 특성에 맞는 감성 카피라이팅과 타겟 해시태그를 단 한 번의 클릭으로 자동 생성합니다.</p>
+            </div>
+            <div class="pt-1 pt-md-0">
+                <?php if (isset($_GET['api']) && $_GET['api'] == '1'): ?>
+                    <span class="badge bg-success py-2 px-3 rounded-pill sns-badge-responsive"><i class="fa-solid fa-robot me-1"></i>OpenAI GPT 연동 생성 완료</span>
+                <?php else: ?>
+                    <span class="badge bg-primary py-2 px-3 rounded-pill sns-badge-responsive"><i class="fa-solid fa-bolt me-1"></i>AI 스마트 템플릿 가동 중</span>
+                <?php endif; ?>
+            </div>
+        </div>
+    </div>
+</div>
+
+<?php if (!empty($flash_msg)): ?>
+    <div class="alert alert-success alert-dismissible fade show mb-4 rounded-3 shadow-sm" role="alert">
+        <i class="fa-solid fa-circle-check me-2"></i>
+        <?php if ($flash_msg === 'deleted'): ?>
+            선택하신 SNS 홍보문구 히스토리가 성공적으로 삭제되었습니다.
+        <?php elseif ($flash_msg === 'generated'): ?>
+            새로운 SNS 홍보문구 생성이 완료되었습니다!
+        <?php endif; ?>
+        <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+    </div>
+<?php endif; ?>
+
+<?php if (!empty($flash_err)): ?>
+    <div class="alert alert-warning alert-dismissible fade show mb-4 rounded-3 shadow-sm" role="alert">
+        <i class="fa-solid fa-triangle-exclamation me-2"></i><?= htmlspecialchars($flash_err) ?>
+        <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+    </div>
+<?php endif; ?>
+
+<div class="row g-4 mb-4">
+    <div class="col-md-5">
+        <div class="glass-card p-4">
+            <h5 class="fw-bold mb-3"><i class="fa-solid fa-wand-magic-sparkles text-primary me-2"></i>생성 옵션</h5>
+            <form id="snsForm" method="POST" action="ai_sns_generator.htm" onsubmit="showLoading();">
+                <input type="hidden" name="generate_sns" value="1">
+                
+                <div class="mb-3">
+                    <label class="form-label small fw-bold text-dark">홍보 채널 선택</label>
+                    <select name="platform" class="form-select">
+                        <?php foreach ($active_channels as $code => $name): ?>
+                            <option value="<?= htmlspecialchars($code) ?>"><?= htmlspecialchars($name) ?></option>
+                        <?php endforeach; ?>
+                    </select>
+                </div>
+
+                <div class="mb-3">
+                    <label class="form-label small fw-bold text-dark">글의 어조 (Tone)</label>
+                    <select name="tone" class="form-select">
+                        <?php foreach ($active_tones as $code => $name): ?>
+                            <option value="<?= htmlspecialchars($code) ?>"><?= htmlspecialchars($name) ?></option>
+                        <?php endforeach; ?>
+                    </select>
+                </div>
+
+                <div class="mb-3">
+                    <label class="form-label small fw-bold text-dark">포함할 주요 키워드</label>
+                    <input type="text" name="keywords" class="form-control" placeholder="예: 주말 할인, 점심 특선, 신메뉴" value="신메뉴 출시 10% 할인" required>
+                </div>
+
+                <?php if ($user_role !== 'USER'): ?>
+                    <button type="submit" class="btn btn-success w-100 fw-bold py-2 shadow-sm rounded-pill mt-2">
+                        <i class="fa-solid fa-bolt me-1"></i>AI 홍보문구 생성하기
+                    </button>
+                <?php else: ?>
+                    <div class="alert alert-info py-2 mb-0 small text-start">
+                        <i class="fa-solid fa-info-circle me-1"></i> 현재 <strong>일반회원(읽기 전용)</strong> 권한입니다. 홍보문구 생성은 사업자회원 승인 후 이용 가능합니다.
+                    </div>
+                <?php endif; ?>
+            </form>
+        </div>
+    </div>
+
+    <div class="col-md-7" id="latest-data">
+        <div class="glass-card p-4 h-100 <?= ($show_latest_new) ? 'border-2 border-success' : '' ?>">
+            <div class="d-flex justify-content-between align-items-center mb-3">
+                <h5 class="fw-bold mb-0"><i class="fa-solid fa-copy text-primary me-2"></i>최근 생성된 홍보문구</h5>
+                <?php if ($show_latest_new): ?>
+                    <span class="badge bg-warning text-dark">NEW</span>
+                <?php endif; ?>
+            </div>
+            <?php if ($latest_copy): ?>
+                <div class="mb-3">
+                    <textarea id="copyText" class="form-control copy-textarea p-3" rows="8" readonly><?= htmlspecialchars($latest_copy['generated_text']) . (!empty($latest_copy['hashtags']) ? "\n\n" . htmlspecialchars($latest_copy['hashtags']) : '') ?></textarea>
+                </div>
+                <div class="d-flex justify-content-between align-items-center flex-wrap gap-2 sns-card-footer">
+                    <button id="btnMainCopy" class="btn btn-outline-primary fw-bold rounded-pill px-3 btn-action-responsive" onclick="copyToClipboard('copyText', this)">
+                        <i class="fa-solid fa-clipboard me-1"></i>클립보드에 복사하기
+                    </button>
+                    <small class="text-muted">* 생성일시: <?= htmlspecialchars($latest_copy['created_at']) ?></small>
+                </div>
+            <?php else: ?>
+                <div class="text-center py-5 text-muted">
+                    <i class="fa-solid fa-robot fa-3x mb-3 opacity-50"></i>
+                    <p>옵션을 선택 후 [AI 홍보문구 생성하기] 버튼을 눌러주세요.</p>
+                </div>
+            <?php endif; ?>
+        </div>
+    </div>
+</div>
+
+<?php if (!empty($history_list)): ?>
+<div class="row mb-4">
+    <div class="col-12">
+        <div class="glass-card p-4">
+            <h5 class="fw-bold mb-3"><i class="fa-solid fa-clock-rotate-left text-primary me-2"></i>이전 생성 히스토리 (총 <?= count($history_list) ?>건)</h5>
+            <div class="row g-3">
+                <?php foreach ($history_list as $idx => $item): ?>
+                    <?php
+                        $clean_summary = trim(preg_replace('/\s+/', ' ', $item['generated_text']));
+                        $display_snippet = mb_strimwidth($clean_summary, 0, 35, '...');
+                        $is_this_item_new = ($show_latest_new && $idx === 0);
+                    ?>
+                    <div class="col-md-6">
+                        <div class="p-3 border rounded-3 bg-white shadow-sm h-100 d-flex flex-column justify-content-between">
+                            <div>
+                                <div class="d-flex justify-content-between align-items-center mb-2 flex-wrap gap-1">
+                                    <div class="d-flex align-items-center gap-1">
+                                        <span class="badge bg-primary text-uppercase"><?= htmlspecialchars($active_channels[$item['platform']] ?? $item['platform']) ?></span>
+                                        <?php if ($is_this_item_new): ?>
+                                            <span class="badge bg-warning text-dark">NEW</span>
+                                        <?php endif; ?>
+                                    </div>
+                                    <small class="text-muted" style="white-space: nowrap;"><?= substr($item['created_at'], 0, 16) ?></small>
+                                </div>
+                                <p class="small text-dark mb-2 text-break" style="white-space: pre-line; line-height: 1.6;"><?= htmlspecialchars($item['generated_text']) ?></p>
+                                <?php if (!empty($item['hashtags'])): ?>
+                                    <p class="small text-primary mb-2 text-break"><?= htmlspecialchars($item['hashtags']) ?></p>
+                                <?php endif; ?>
+                            </div>
+                            <div class="pt-2 border-top d-flex justify-content-between align-items-center">
+                                <textarea id="hist_<?= $item['id'] ?>" class="d-none"><?= htmlspecialchars($item['generated_text']) . (!empty($item['hashtags']) ? "\n\n" . htmlspecialchars($item['hashtags']) : '') ?></textarea>
+                                
+                                <?php if ($user_role !== 'USER'): ?>
+                                    <button type="button" 
+                                            class="btn btn-sm btn-outline-danger border-0 rounded-pill px-2 btn-trigger-delete" 
+                                            data-id="<?= $item['id'] ?>" 
+                                            data-snippet="<?= htmlspecialchars($display_snippet, ENT_QUOTES, 'UTF-8') ?>" 
+                                            title="기록 삭제">
+                                        <i class="fa-solid fa-trash-can me-1"></i>삭제
+                                    </button>
+                                <?php else: ?>
+                                    <span></span>
+                                <?php endif; ?>
+
+                                <button class="btn btn-sm btn-light border rounded-pill px-3" onclick="copyToClipboard('hist_<?= $item['id'] ?>', this)">
+                                    <i class="fa-solid fa-copy me-1"></i>복사
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                <?php endforeach; ?>
+            </div>
+        </div>
+    </div>
+</div>
+<?php endif; ?>
+
+<!-- 삭제 모달 -->
+<div class="modal fade" id="snsDeleteModal" tabindex="-1" aria-labelledby="snsDeleteModalLabel" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-content border-0 shadow-lg rounded-4">
+            <div class="modal-header bg-danger text-white rounded-top-4 py-3">
+                <h5 class="modal-title fw-bold fs-6" id="snsDeleteModalLabel">
+                    <i class="fa-solid fa-trash-can me-2"></i>홍보문구 기록 삭제 확인
+                </h5>
+                <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body p-4 text-center">
+                <div class="mb-3">
+                    <i class="fa-solid fa-circle-question text-danger fa-3x animate__animated animate__shakeX"></i>
+                </div>
+                <h6 class="fw-bold text-dark mb-2">선택하신 홍보문구 기록을 영구히 삭제하시겠습니까?</h6>
+                <div class="p-3 bg-light rounded-3 text-start small text-secondary border mb-3">
+                    <strong>삭제 대상: </strong><span id="deleteTargetSnippet" class="text-dark fw-bold"></span>
+                </div>
+                <p class="text-muted small mb-0">삭제 후 복구할 수 없습니다.</p>
+            </div>
+            <div class="modal-footer bg-light border-0 rounded-bottom-4 justify-content-center gap-2 py-3">
+                <button type="button" class="btn btn-secondary px-4 rounded-pill fw-bold" data-bs-dismiss="modal">취소</button>
+                <a id="btnConfirmSnsDelete" href="#" class="btn btn-danger px-4 rounded-pill fw-bold">
+                    <i class="fa-solid fa-trash-can me-1"></i>삭제 확정
+                </a>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- 복사 실패 모달 -->
+<div class="modal fade" id="snsCopyErrorModal" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered modal-sm">
+        <div class="modal-content border-0 shadow-lg rounded-4 text-center p-3">
+            <div class="modal-body py-4">
+                <i class="fa-solid fa-triangle-exclamation text-warning fa-3x mb-3"></i>
+                <h6 class="fw-bold text-dark mb-2">복사 안내</h6>
+                <p class="text-muted small mb-0">복사에 실패했습니다. 내용을 직접 선택하여 복사해주세요.</p>
+            </div>
+            <div class="modal-footer border-0 justify-content-center p-0">
+                <button type="button" class="btn btn-secondary btn-sm rounded-pill px-4" data-bs-dismiss="modal">확인</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+function showLoading() {
+    document.getElementById('loadingOverlay').style.display = 'flex';
+}
+
+function copyToClipboard(elementId, btnElement) {
+    const copyText = document.getElementById(elementId);
+    if (!copyText) return;
+    
+    const textToCopy = copyText.value;
+
+    const onSuccess = () => {
+        if (btnElement) {
+            const originalHtml = btnElement.innerHTML;
+            btnElement.innerHTML = '<i class="fa-solid fa-check text-success me-1"></i>복사 완료!';
+            btnElement.classList.add('border-success');
+            setTimeout(() => {
+                btnElement.innerHTML = originalHtml;
+                btnElement.classList.remove('border-success');
+            }, 2000);
+        }
+    };
+
+    if (navigator.clipboard && window.isSecureContext) {
+        navigator.clipboard.writeText(textToCopy).then(onSuccess).catch(() => {
+            fallbackCopy(textToCopy, onSuccess);
+        });
+    } else {
+        fallbackCopy(textToCopy, onSuccess);
+    }
+}
+
+function fallbackCopy(text, callback) {
+    const tempElement = document.createElement("textarea");
+    tempElement.value = text;
+    tempElement.style.position = "fixed";
+    tempElement.style.left = "-9999px";
+    document.body.appendChild(tempElement);
+    tempElement.select();
+    try {
+        document.execCommand("copy");
+        if (callback) callback();
+    } catch (err) {
+        if (typeof bootstrap !== 'undefined') {
+            new bootstrap.Modal(document.getElementById('snsCopyErrorModal')).show();
+        }
+    }
+    document.body.removeChild(tempElement);
+}
+
+document.addEventListener("DOMContentLoaded", function() {
+    const modalElement = document.getElementById('snsDeleteModal');
+    let snsModalInstance = null;
+    if (modalElement && typeof bootstrap !== 'undefined') {
+        snsModalInstance = new bootstrap.Modal(modalElement);
+    }
+
+    document.querySelectorAll('.btn-trigger-delete').forEach(function(btn) {
+        btn.addEventListener('click', function() {
+            const id = this.getAttribute('data-id');
+            const snippet = this.getAttribute('data-snippet');
+            
+            document.getElementById('deleteTargetSnippet').innerText = snippet;
+            document.getElementById('btnConfirmSnsDelete').href = 'ai_sns_generator.htm?action=delete&id=' + id;
+            
+            if (snsModalInstance) {
+                snsModalInstance.show();
+            }
+        });
+    });
+
+    <?php if ($is_generated): ?>
+    const latestItem = document.getElementById("latest-data");
+    if (latestItem) {
+        const offset = 100;
+        const bodyRect = document.body.getBoundingClientRect().top;
+        const elementRect = latestItem.getBoundingClientRect().top;
+        const elementPosition = elementRect - bodyRect;
+        const offsetPosition = elementPosition - offset;
+
+        window.scrollTo({
+            top: offsetPosition,
+            behavior: "smooth"
+        });
+    }
+
+    if (window.history.replaceState) {
+        window.history.replaceState(null, null, window.location.pathname);
+    }
+    <?php endif; ?>
+});
+</script>
+
+<?php
+include_once 'footer.php';
+?>
+</body>
+</html>

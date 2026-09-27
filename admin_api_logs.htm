@@ -1,0 +1,335 @@
+<?php
+/* ========================================================================== */
+/* 1. 헤더 전송 에러 원천 차단을 위한 최상단 버퍼링 */
+/* ========================================================================== */
+if (session_status() === PHP_SESSION_NONE) {
+    session_start();
+}
+ob_start();
+
+require_once 'db.php';
+
+/* ========================================================================== */
+/* 2. 관리자 권한 선행 검증 */
+/* ========================================================================== */
+if (!isset($_SESSION['user_id'])) {
+    header("Location: login.htm");
+    exit;
+}
+
+$user_id = $_SESSION['user_id'];
+$is_admin = false;
+
+try {
+    $stmt = $pdo->prepare("SELECT role FROM users WHERE id = :id LIMIT 1");
+    $stmt->execute(['id' => $user_id]);
+    $current_user = $stmt->fetch(PDO::FETCH_ASSOC);
+    if ($current_user && $current_user['role'] === 'ADMIN') {
+        $is_admin = true;
+    }
+} catch (PDOException $e) {
+    $is_admin = false;
+}
+
+if (!$is_admin) {
+    header("Location: dashboard.htm");
+    exit;
+}
+
+require_once 'header.php';
+
+/* ========================================================================== */
+/* DB 설정값 로드 */
+/* ========================================================================== */
+$db_settings = [];
+try {
+    $set_stmt = $pdo->query("SELECT setting_key, setting_value FROM site_settings");
+    if ($set_stmt) {
+        while ($srow = $set_stmt->fetch(PDO::FETCH_ASSOC)) {
+            $db_settings[$srow['setting_key']] = $srow['setting_value'];
+        }
+    }
+} catch (PDOException $e) {}
+
+/* ========================================================================== */
+/* 3. 실시간 핑(Latency) 측정 헬퍼 */
+/* ========================================================================== */
+function checkApiStatusWithLatency($url, $headers = [], $postData = null) {
+    if (!function_exists('curl_init')) {
+        return ['status' => false, 'latency' => 0, 'code' => 500];
+    }
+    
+    $ch = curl_init();
+    if (!$ch) return ['status' => false, 'latency' => 0, 'code' => 500];
+
+    curl_setopt_array($ch, [
+        CURLOPT_URL => $url,
+        CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_CONNECTTIMEOUT => 3,
+        CURLOPT_TIMEOUT => 3,
+        CURLOPT_SSL_VERIFYPEER => false,
+        CURLOPT_SSL_VERIFYHOST => false
+    ]);
+    
+    if (!empty($postData)) {
+        curl_setopt($ch, CURLOPT_POST, true);
+        curl_setopt($ch, CURLOPT_POSTFIELDS, $postData);
+    }
+    if (!empty($headers)) {
+        curl_setopt($ch, CURLOPT_HTTPHEADER, $headers);
+    }
+    
+    $start_time = microtime(true);
+    $response = @curl_exec($ch);
+    $latency = round((microtime(true) - $start_time) * 1000);
+    $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+    curl_close($ch);
+    
+    $is_ok = ($httpCode >= 200 && $httpCode < 450);
+    return ['status' => $is_ok, 'latency' => $latency, 'code' => $httpCode];
+}
+
+/* ========================================================================== */
+/* 4. 외부 오픈 API 실시간 상태 체크 (정확한 엔드포인트 파라미터 적용) */
+/* ========================================================================== */
+// 1) 국세청 API
+$serviceKey = $db_settings['api_hometax_key'] ?? (getenv('HOMETAX_SERVICE_KEY') ?: ($_ENV['HOMETAX_SERVICE_KEY'] ?? '52f3a8745c117a5db9e63d40333663a2d04aec1271c3eb16a19285110739eafd'));
+$hometax_info = checkApiStatusWithLatency(
+    'https://api.odcloud.kr/api/nts-businessman/v1/status?serviceKey=' . urlencode($serviceKey),
+    ['Content-Type: application/json'],
+    json_encode(['b_no' => ['1234567890']])
+);
+$hometax_online = $hometax_info['status'];
+
+// 2) OpenAI API
+$openai_key = $db_settings['api_openai_key'] ?? (getenv('OPENAI_API_KEY') ?: ($_ENV['OPENAI_API_KEY'] ?? ''));
+$openai_info = !empty($openai_key) ? checkApiStatusWithLatency('https://api.openai.com/v1/models', ['Authorization: Bearer ' . $openai_key]) : ['status' => false, 'latency' => 0, 'code' => 401];
+$openai_online = $openai_info['status'];
+
+// 3) NAVER CLOVA OCR
+$ocr_url = $db_settings['api_clova_ocr_url'] ?? (getenv('CLOVA_OCR_URL') ?: ($_ENV['CLOVA_OCR_URL'] ?? 'https://migyv8nuyv.apigw.ntruss.com/custom/v1/56343/2e6781af1c4cd14fe36b663fc288feb7270850e7b7e1e02b9ce8675aa355374c/general'));
+$ocr_info = !empty($ocr_url) ? checkApiStatusWithLatency($ocr_url, ['Content-Type: application/json']) : ['status' => false, 'latency' => 0, 'code' => 404];
+$ocr_online = $ocr_info['status'];
+
+// 4) 공공데이터포털 소상공인 상권정보 API (정상 표준 엔드포인트)
+$commercial_key = $db_settings['api_public_portal_key'] ?? ($db_settings['data_go_kr_api_key'] ?? '');
+$commercial_info = !empty($commercial_key) 
+    ? checkApiStatusWithLatency("https://apis.data.go.kr/B553077/api/open/sdsc2/storeListInDong?serviceKey=" . urlencode($commercial_key) . "&divId=ctprvnCd&key=11&type=json&numOfRows=1") 
+    : ['status' => false, 'latency' => 0, 'code' => 401];
+$commercial_online = $commercial_info['status'];
+
+// 5) 카카오 로컬 REST API
+$kakao_key = $db_settings['api_kakao_rest_key'] ?? (getenv('KAKAO_REST_KEY') ?: '');
+$kakao_info = !empty($kakao_key)
+    ? checkApiStatusWithLatency("https://dapi.kakao.com/v2/local/search/keyword.json?query=" . urlencode("스타벅스") . "&size=1", ["Authorization: KakaoAK " . $kakao_key])
+    : ['status' => false, 'latency' => 0, 'code' => 401];
+$kakao_online = $kakao_info['status'];
+
+/* ========================================================================== */
+/* 5. DB 집계 쿼리 */
+/* ========================================================================== */
+$anomalies = [];
+$ai_recs = [];
+$sales_count = 0;
+$stores_count = 0;
+$users_count = 0;
+
+try {
+    $anom_stmt = $pdo->query("
+        SELECT a.*, COALESCE(u.username, '미지정') AS username 
+        FROM anomaly_logs a 
+        LEFT JOIN users u ON a.user_id = u.id 
+        ORDER BY a.id DESC 
+        LIMIT 10
+    ");
+    if ($anom_stmt) {
+        $anomalies = $anom_stmt->fetchAll(PDO::FETCH_ASSOC);
+    }
+} catch (PDOException $e) {}
+
+try {
+    $rec_stmt = $pdo->query("
+        SELECT r.*, COALESCE(u.username, '미지정') AS username 
+        FROM ai_recommendations r 
+        LEFT JOIN users u ON r.user_id = u.id 
+        ORDER BY r.id DESC 
+        LIMIT 5
+    ");
+    if ($rec_stmt) {
+        $ai_recs = $rec_stmt->fetchAll(PDO::FETCH_ASSOC);
+    }
+} catch (PDOException $e) {}
+
+try { $sales_count = (int)$pdo->query("SELECT COUNT(*) FROM sales_data")->fetchColumn(); } catch (PDOException $e) {}
+try { $stores_count = (int)$pdo->query("SELECT COUNT(*) FROM stores")->fetchColumn(); } catch (PDOException $e) {}
+try { $users_count = (int)$pdo->query("SELECT COUNT(*) FROM users")->fetchColumn(); } catch (PDOException $e) {}
+?>
+
+<style>
+    .admin-title-responsive { font-size: clamp(1.05rem, 1.8vw, 1.45rem) !important; line-height: 1.35 !important; }
+    .btn-responsive { font-size: clamp(0.78rem, 0.9vw, 0.88rem) !important; padding: 0.4rem 0.95rem !important; border-radius: 50rem !important; white-space: nowrap !important; }
+    .admin-table-scroll-wrapper { width: 100%; overflow-x: auto !important; -webkit-overflow-scrolling: touch; }
+    .admin-api-table { min-width: 620px !important; width: 100% !important; }
+    .admin-api-table th, .admin-api-table td { white-space: nowrap !important; font-size: clamp(0.82rem, 1vw, 0.9rem) !important; padding: 0.75rem 0.85rem !important; }
+    .status-mini-card { border-radius: 12px; transition: transform 0.2s ease, box-shadow 0.2s ease; }
+    .status-mini-card:hover { transform: translateY(-2px); box-shadow: 0 4px 12px rgba(0, 0, 0, 0.06); }
+    .latency-tag { font-size: 0.72rem; padding: 2px 6px; border-radius: 4px; background: #f1f5f9; color: #475569; display: inline-block; margin-top: 4px; }
+</style>
+
+<div class="container-fluid py-3 py-md-4">
+    <div class="d-flex flex-column flex-sm-row justify-content-between align-items-start align-items-sm-center mb-4 gap-3">
+        <div class="w-100">
+            <h3 class="fw-bold text-primary mb-0 admin-title-responsive">
+                <i class="fa-solid fa-server me-2"></i>오픈 API 연동 실시간 상태 및 DB 자동 등록 검증 센터
+            </h3>
+        </div>
+        <div class="d-flex gap-2 ms-auto ms-sm-0">
+            <button type="button" class="btn btn-primary btn-responsive shadow-sm" onclick="location.reload();">
+                <i class="fa-solid fa-arrows-rotate me-1"></i>실시간 핑 갱신
+            </button>
+            <a href="dashboard.htm" class="btn btn-outline-secondary btn-responsive">
+                <i class="fa-solid fa-house me-1"></i>대시보드로 돌아가기
+            </a>
+        </div>
+    </div>
+
+    <!-- API 실시간 연결 모니터링 카드 5종 -->
+    <div class="row row-cols-1 row-cols-sm-2 row-cols-md-3 row-cols-lg-5 g-3 mb-4">
+        <div class="col">
+            <div class="glass-card p-3 text-center border-start border-4 border-<?= $hometax_online ? 'success' : 'warning' ?> h-100 status-mini-card shadow-sm">
+                <small class="text-muted fw-bold d-block mb-1">국세청 홈택스 API</small>
+                <div class="fs-6 fw-bold text-<?= $hometax_online ? 'success' : 'warning' ?> mb-1">
+                    <i class="fa-solid fa-<?= $hometax_online ? 'circle-check' : 'circle-exclamation' ?> me-1"></i>
+                    <?= $hometax_online ? '실시간 연동중' : '키 확인 대기' ?>
+                </div>
+                <div class="latency-tag"><i class="fa-solid fa-bolt me-1"></i><?= $hometax_info['latency'] ?>ms</div>
+                <small class="text-secondary d-block mt-1">판매 데이터: <?= number_format($sales_count) ?>건</small>
+            </div>
+        </div>
+
+        <div class="col">
+            <div class="glass-card p-3 text-center border-start border-4 border-<?= $openai_online ? 'primary' : 'secondary' ?> h-100 status-mini-card shadow-sm">
+                <small class="text-muted fw-bold d-block mb-1">OpenAI GPT API</small>
+                <div class="fs-6 fw-bold text-<?= $openai_online ? 'primary' : 'secondary' ?> mb-1">
+                    <i class="fa-solid fa-robot me-1"></i>
+                    <?= $openai_online ? '실시간 연동중' : '키 설정 대기' ?>
+                </div>
+                <div class="latency-tag"><i class="fa-solid fa-bolt me-1"></i><?= $openai_info['latency'] ?>ms</div>
+                <small class="text-secondary d-block mt-1">AI 맞춤 전략 생성</small>
+            </div>
+        </div>
+
+        <div class="col">
+            <div class="glass-card p-3 text-center border-start border-4 border-<?= $commercial_online ? 'info' : 'secondary' ?> h-100 status-mini-card shadow-sm">
+                <small class="text-muted fw-bold d-block mb-1">공공데이터 상권 API</small>
+                <div class="fs-6 fw-bold text-<?= $commercial_online ? 'info' : 'secondary' ?> mb-1">
+                    <i class="fa-solid fa-cloud-sun me-1"></i><?= $commercial_online ? '실시간 연동중' : '키 설정 대기' ?>
+                </div>
+                <div class="latency-tag"><i class="fa-solid fa-bolt me-1"></i><?= $commercial_info['latency'] ?>ms</div>
+                <small class="text-secondary d-block mt-1">동종 상권 벤치마킹</small>
+            </div>
+        </div>
+
+        <div class="col">
+            <div class="glass-card p-3 text-center border-start border-4 border-<?= $kakao_online ? 'warning' : 'secondary' ?> h-100 status-mini-card shadow-sm">
+                <small class="text-muted fw-bold d-block mb-1">카카오 로컬 상권 API</small>
+                <div class="fs-6 fw-bold text-<?= $kakao_online ? 'warning' : 'secondary' ?> mb-1">
+                    <i class="fa-solid fa-crosshairs me-1"></i><?= $kakao_online ? '실시간 연동중' : '키 설정 대기' ?>
+                </div>
+                <div class="latency-tag"><i class="fa-solid fa-bolt me-1"></i><?= $kakao_info['latency'] ?>ms</div>
+                <small class="text-secondary d-block mt-1">경쟁 매장 실시간 탐색</small>
+            </div>
+        </div>
+
+        <div class="col">
+            <div class="glass-card p-3 text-center border-start border-4 border-<?= $ocr_online ? 'warning' : 'secondary' ?> h-100 status-mini-card shadow-sm">
+                <small class="text-muted fw-bold d-block mb-1">NAVER CLOVA OCR</small>
+                <div class="fs-6 fw-bold text-warning mb-1">
+                    <i class="fa-solid fa-expand me-1"></i>
+                    <?= $ocr_online ? '스캔 연동중' : '엔드포인트 대기' ?>
+                </div>
+                <div class="latency-tag"><i class="fa-solid fa-bolt me-1"></i><?= $ocr_info['latency'] ?>ms</div>
+                <small class="text-secondary d-block mt-1">등록 매장: <?= number_format($stores_count) ?>개</small>
+            </div>
+        </div>
+    </div>
+
+    <!-- DB 자동 등록 데이터 실시간 검증 테이블 -->
+    <div class="row g-4">
+        <div class="col-lg-6">
+            <div class="glass-card p-4 h-100 shadow-sm">
+                <h5 class="fw-bold mb-3 text-danger"><i class="fa-solid fa-triangle-exclamation me-2"></i>'매출 로그' 실시간 등록</h5>
+                <div class="table-responsive admin-table-scroll-wrapper">
+                    <table class="table table-hover align-middle admin-api-table mb-0">
+                        <thead class="table-light">
+                            <tr>
+                                <th style="width: 15%;">점주</th>
+                                <th style="width: 20%;">감지 유형</th>
+                                <th style="width: 15%;">심각도</th>
+                                <th style="width: 32%;">메시지</th>
+                                <th style="width: 18%;">일시</th>
+                            </tr>
+                        </thead>
+                        <tbody class="small">
+                            <?php if (empty($anomalies)): ?>
+                                <tr>
+                                    <td colspan="5" class="text-center py-4 text-muted">등록된 이상치 로그가 없습니다.</td>
+                                </tr>
+                            <?php else: ?>
+                                <?php foreach ($anomalies as $a): ?>
+                                <tr>
+                                    <td class="fw-bold"><?= htmlspecialchars($a['username']) ?></td>
+                                    <td><span class="badge bg-secondary"><?= htmlspecialchars($a['anomaly_type'] ?? '') ?></span></td>
+                                    <td><span class="badge bg-<?= ($a['severity'] ?? '') === 'CRITICAL' ? 'danger' : 'warning' ?>"><?= htmlspecialchars($a['severity'] ?? 'INFO') ?></span></td>
+                                    <td class="text-wrap-cell"><?= htmlspecialchars($a['message'] ?? '') ?></td>
+                                    <td class="text-muted"><?= !empty($a['created_at']) ? date('Y-m-d H:i:s', strtotime($a['created_at'])) : '-' ?></td>
+                                </tr>
+                                <?php endforeach; ?>
+                            <?php endif; ?>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+
+        <div class="col-lg-6">
+            <div class="glass-card p-4 h-100 shadow-sm">
+                <h5 class="fw-bold mb-3 text-primary"><i class="fa-solid fa-wand-magic-sparkles me-2"></i>'AI 마케팅 추천' 저장 이력</h5>
+                <div class="table-responsive admin-table-scroll-wrapper">
+                    <table class="table table-hover align-middle admin-api-table mb-0">
+                        <thead class="table-light">
+                            <tr>
+                                <th style="width: 15%;">점주</th>
+                                <th style="width: 35%;">추천 전략 제목</th>
+                                <th style="width: 25%;">타겟 고객</th>
+                                <th style="width: 25%;">기대 효과</th>
+                            </tr>
+                        </thead>
+                        <tbody class="small">
+                            <?php if (empty($ai_recs)): ?>
+                                <tr>
+                                    <td colspan="4" class="text-center py-4 text-muted">저장된 마케팅 추천 이력이 없습니다.</td>
+                                </tr>
+                            <?php else: ?>
+                                <?php foreach ($ai_recs as $r): ?>
+                                <tr>
+                                    <td class="fw-bold"><?= htmlspecialchars($r['username']) ?></td>
+                                    <td class="fw-bold text-primary text-wrap-cell"><?= htmlspecialchars($r['title'] ?? '') ?></td>
+                                    <td class="text-wrap-cell"><?= htmlspecialchars($r['target_audience'] ?? '') ?></td>
+                                    <td><span class="badge bg-success-subtle text-success border border-success-subtle px-2 py-1"><?= htmlspecialchars($r['expected_effect'] ?? '') ?></span></td>
+                                </tr>
+                                <?php endforeach; ?>
+                            <?php endif; ?>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<?php
+include_once 'footer.php';
+?>
+</body>
+</html>

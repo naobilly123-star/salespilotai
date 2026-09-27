@@ -1,0 +1,296 @@
+<?php
+/* ========================================================================== */
+/* 🥗 19대 알레르기 유발물질 & 원산지 표지판 자동 생성기 (allergy_origin_board.htm) */
+/* ========================================================================== */
+if (session_status() === PHP_SESSION_NONE) {
+    session_start();
+}
+ob_start();
+
+require_once 'db.php';
+
+if (!isset($_SESSION['user_id'])) {
+    header("Location: login.htm");
+    exit;
+}
+
+$user_id = (int)$_SESSION['user_id'];
+$user_role = $_SESSION['role'] ?? 'USER';
+$store_name = $_SESSION['store_name'] ?? '내 매장';
+
+if (empty($_SESSION['csrf_token'])) {
+    $_SESSION['csrf_token'] = bin2hex(random_bytes(32));
+}
+$csrf_token = $_SESSION['csrf_token'];
+
+try {
+    $pdo->exec("
+        CREATE TABLE IF NOT EXISTS `store_allergy_origin` (
+            `id` INT AUTO_INCREMENT PRIMARY KEY,
+            `user_id` INT NOT NULL,
+            `menu_name` VARCHAR(80) NOT NULL,
+            `ingredient_name` VARCHAR(80) NOT NULL,
+            `origin_country` VARCHAR(50) NOT NULL DEFAULT '국내산',
+            `allergy_triggers` VARCHAR(150) NULL,
+            `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            KEY `idx_user` (`user_id`)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+    ");
+} catch (PDOException $e) {}
+
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
+    if (!hash_equals($_SESSION['csrf_token'] ?? '', $_POST['csrf_token'] ?? '')) {
+        $_SESSION['flash_err'] = '비정상적인 요청이거나 세션이 만료되었습니다.';
+        header("Location: allergy_origin_board.htm");
+        exit;
+    }
+
+    if ($user_role === 'USER') {
+        $_SESSION['flash_err'] = '일반회원(읽기 전용)은 표지판 수정 권한이 없습니다.';
+        header("Location: allergy_origin_board.htm");
+        exit;
+    }
+
+    if ($_POST['action'] === 'add_item') {
+        $menu = trim($_POST['menu_name'] ?? '');
+        $ing = trim($_POST['ingredient_name'] ?? '');
+        $origin = trim($_POST['origin_country'] ?? '국내산');
+        $triggers = isset($_POST['allergy_list']) && is_array($_POST['allergy_list']) ? implode(', ', $_POST['allergy_list']) : '해당 없음';
+
+        if (!empty($menu) && !empty($ing)) {
+            try {
+                $ins = $pdo->prepare("
+                    INSERT INTO store_allergy_origin 
+                    (user_id, menu_name, ingredient_name, origin_country, allergy_triggers) 
+                    VALUES (?, ?, ?, ?, ?)
+                ");
+                $ins->execute([$user_id, $menu, $ing, $origin, $triggers]);
+                $_SESSION['flash_msg'] = "메뉴 '{$menu}'의 원산지 및 알레르기 정보가 성공적으로 등록되었습니다.";
+            } catch (PDOException $e) {
+                $_SESSION['flash_err'] = '등록 중 데이터베이스 오류가 발생했습니다.';
+            }
+        }
+    } elseif ($_POST['action'] === 'delete_item') {
+        $del_id = intval($_POST['item_id'] ?? 0);
+        try {
+            $del = $pdo->prepare("DELETE FROM store_allergy_origin WHERE id = ? AND user_id = ?");
+            $del->execute([$del_id, $user_id]);
+            $_SESSION['flash_msg'] = '선택하신 항목이 삭제되었습니다.';
+        } catch (PDOException $e) {
+            $_SESSION['flash_err'] = '삭제 처리 중 오류가 발생했습니다.';
+        }
+    }
+
+    header("Location: allergy_origin_board.htm");
+    exit;
+}
+
+$flash_msg = $_SESSION['flash_msg'] ?? '';
+$flash_err = $_SESSION['flash_err'] ?? '';
+unset($_SESSION['flash_msg'], $_SESSION['flash_err']);
+
+$items = [];
+try {
+    $stmt = $pdo->prepare("SELECT * FROM store_allergy_origin WHERE user_id = ? ORDER BY id ASC");
+    $stmt->execute([$user_id]);
+    $items = $stmt->fetchAll(PDO::FETCH_ASSOC);
+} catch (PDOException $e) {}
+
+if (empty($items)) {
+    $items = [
+        ['id' => 0, 'menu_name' => '제육볶음 정식', 'ingredient_name' => '돼지고기 / 쌀 / 배추김치', 'origin_country' => '돼지고기(국내산), 쌀(국내산), 고춧가루(중국산)', 'allergy_triggers' => '돼지고기, 대두, 밀'],
+        ['id' => 0, 'menu_name' => '소고기 된장찌개', 'ingredient_name' => '소고기 / 두부', 'origin_country' => '소고기(호주산), 콩(외국산)', 'allergy_triggers' => '쇠고기, 대두, 조개류(바지락)'],
+        ['id' => 0, 'menu_name' => '후라이드 치킨', 'ingredient_name' => '닭고기', 'origin_country' => '닭고기(국내산)', 'allergy_triggers' => '닭고기, 밀, 대두, 우유']
+    ];
+}
+
+$official_allergies = ['알류(달걀)', '우유', '메밀', '땅콩', '대두', '밀', '고등어', '게', '새우', '돼지고기', '복숭아', '토마토', '아황산류', '호두', '닭고기', '쇠고기', '오징어', '조개류', '잣'];
+
+require_once 'header.php';
+?>
+
+<style>
+    .board-title-responsive { font-size: clamp(1.15rem, 1.8vw, 1.75rem) !important; font-weight: 800 !important; color: #0f172a; }
+    .board-scroll-wrapper { width: 100%; overflow-x: auto !important; -webkit-overflow-scrolling: touch; padding-bottom: 6px; }
+    .board-detail-table { min-width: 820px !important; width: 100% !important; }
+    .board-detail-table th, .board-detail-table td { white-space: nowrap !important; vertical-align: middle !important; padding: 0.85rem 0.95rem !important; }
+    .board-paper-box { background: #ffffff; border: 3px solid #1e293b; border-radius: 8px; padding: 2rem; max-width: 750px; margin: 0 auto; font-family: 'Pretendard', sans-serif; }
+    @media print {
+        @page { size: A4 portrait; margin: 15mm; }
+        body { background: #ffffff !important; -webkit-print-color-adjust: exact; }
+        .navbar, .btn-print-hide, footer, .alert { display: none !important; }
+        .board-paper-box { border: 3px solid #000000 !important; box-shadow: none !important; margin: 0 auto !important; width: 100% !important; max-width: 100% !important; }
+    }
+</style>
+
+<div class="row mb-4 align-items-center btn-print-hide">
+    <div class="col-md-7">
+        <h3 class="fw-bold mb-1 board-title-responsive">
+            <i class="fa-solid fa-shield-cat text-primary me-2"></i>원산지 표지판 & 19대 알레르기 유발물질 생성기
+        </h3>
+        <p class="text-muted mb-0 small">
+            식품위생법 규격에 맞춰 원산지 및 알레르기 안내판을 즉시 인쇄합니다.
+        </p>
+    </div>
+    <div class="col-md-5 text-md-end mt-3 mt-md-0">
+        <button type="button" class="btn btn-outline-primary rounded-pill px-3 py-2 fw-semibold small shadow-sm me-1" onclick="window.print();">
+            <i class="fa-solid fa-print me-1"></i>표지판 인쇄 (A4)
+        </button>
+        <?php if ($user_role !== 'USER'): ?>
+            <button type="button" class="btn btn-primary rounded-pill px-3 py-2 fw-semibold small shadow-sm" data-bs-toggle="modal" data-bs-target="#addItemModal">
+                <i class="fa-solid fa-plus me-1"></i>메뉴 원산지 추가
+            </button>
+        <?php endif; ?>
+    </div>
+</div>
+
+<?php if ($flash_msg): ?>
+    <div class="alert alert-success alert-dismissible fade show rounded-3 mb-4 shadow-sm small btn-print-hide" role="alert">
+        <i class="fa-solid fa-circle-check me-2 text-success"></i><?= htmlspecialchars($flash_msg) ?>
+        <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+    </div>
+<?php endif; ?>
+
+<?php if ($flash_err): ?>
+    <div class="alert alert-danger alert-dismissible fade show rounded-3 mb-4 shadow-sm small btn-print-hide" role="alert">
+        <i class="fa-solid fa-triangle-exclamation me-2 text-danger"></i><?= htmlspecialchars($flash_err) ?>
+        <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+    </div>
+<?php endif; ?>
+
+<div class="row mb-4 btn-print-hide">
+    <div class="col-12">
+        <div class="glass-card p-4">
+            <h5 class="fw-bold mb-3 text-dark"><i class="fa-solid fa-list-check me-2 text-primary"></i>등록된 메뉴별 원산지/알레르기 대장</h5>
+            <div class="board-scroll-wrapper">
+                <table class="table table-hover align-middle board-detail-table mb-0">
+                    <thead class="table-light">
+                        <tr>
+                            <th>메뉴명</th>
+                            <th>주요 원재료</th>
+                            <th>원산지 국가 표시</th>
+                            <th>함유 알레르기 성분</th>
+                            <th class="text-center">관리</th>
+                        </tr>
+                    </thead>
+                    <tbody class="small">
+                        <?php foreach ($items as $it): ?>
+                            <tr>
+                                <td class="fw-bold text-dark"><?= htmlspecialchars($it['menu_name']) ?></td>
+                                <td><?= htmlspecialchars($it['ingredient_name']) ?></td>
+                                <td class="text-primary fw-semibold"><?= htmlspecialchars($it['origin_country']) ?></td>
+                                <td><span class="badge bg-warning-subtle text-warning-emphasis border"><?= htmlspecialchars($it['allergy_triggers'] ?: '해당 없음') ?></span></td>
+                                <td class="text-center">
+                                    <?php if ($user_role !== 'USER' && !empty($it['id'])): ?>
+                                        <form method="POST" action="allergy_origin_board.htm" class="d-inline" onsubmit="return confirm('이 항목을 삭제하시겠습니까?');">
+                                            <input type="hidden" name="action" value="delete_item">
+                                            <input type="hidden" name="csrf_token" value="<?= htmlspecialchars($csrf_token) ?>">
+                                            <input type="hidden" name="item_id" value="<?= (int)$it['id'] ?>">
+                                            <button type="submit" class="btn btn-outline-danger btn-sm rounded-pill px-2 py-0"><i class="fa-solid fa-trash-can"></i></button>
+                                        </form>
+                                    <?php else: ?>
+                                        <span class="text-muted">-</span>
+                                    <?php endif; ?>
+                                </td>
+                            </tr>
+                        <?php endforeach; ?>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="row">
+    <div class="col-12">
+        <div class="board-paper-box" id="printBoardSection">
+            <div class="text-center border-bottom border-3 border-dark pb-3 mb-4">
+                <h2 class="fw-bold text-dark mb-1">원 산 지   표 시 판</h2>
+                <p class="text-muted small mb-0">농수산물의 원산지 표시에 관한 법률 및 식품위생법 규격 준수</p>
+            </div>
+            <table class="table table-bordered text-center align-middle small mb-4">
+                <thead class="table-light">
+                    <tr>
+                        <th style="width: 25%;">메 뉴 명</th>
+                        <th style="width: 25%;">원 재 료</th>
+                        <th style="width: 25%;">원 산 지</th>
+                        <th style="width: 25%;">알레르기 유발성분</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <?php foreach ($items as $row): ?>
+                        <tr>
+                            <td class="fw-bold"><?= htmlspecialchars($row['menu_name']) ?></td>
+                            <td><?= htmlspecialchars($row['ingredient_name']) ?></td>
+                            <td class="fw-bold text-dark"><?= htmlspecialchars($row['origin_country']) ?></td>
+                            <td class="text-muted small"><?= htmlspecialchars($row['allergy_triggers'] ?: '-') ?></td>
+                        </tr>
+                    <?php endforeach; ?>
+                </tbody>
+            </table>
+            <div class="p-3 bg-light rounded text-muted small mb-3">
+                * 특정 식재료에 알레르기가 있으신 고객님께서는 주문 전 직원에게 미리 말씀해 주시기 바랍니다.<br>
+                * 본 사업장은 신선하고 안전한 식재료 관리 기준을 성실히 이행합니다.
+            </div>
+            <div class="text-end fw-bold text-dark fs-6">
+                상호명: <?= htmlspecialchars($store_name) ?>
+            </div>
+        </div>
+    </div>
+</div>
+
+<?php if ($user_role !== 'USER'): ?>
+<div class="modal fade btn-print-hide" id="addItemModal" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered modal-lg">
+        <div class="modal-content border-0 shadow-lg rounded-4 overflow-hidden">
+            <form method="POST" action="allergy_origin_board.htm">
+                <input type="hidden" name="action" value="add_item">
+                <input type="hidden" name="csrf_token" value="<?= htmlspecialchars($csrf_token) ?>">
+                <div class="modal-header bg-primary text-white py-3 px-4">
+                    <h5 class="modal-title fs-6 fw-bold text-white"><i class="fa-solid fa-plus me-2"></i>메뉴별 원산지 및 알레르기 성분 등록</h5>
+                    <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body p-4">
+                    <div class="row">
+                        <div class="col-md-6 mb-3">
+                            <label class="form-label fw-bold small text-dark">메뉴명 <span class="text-danger">*</span></label>
+                            <input type="text" name="menu_name" class="form-control" placeholder="예: 한우 육회비빔밥" required>
+                        </div>
+                        <div class="col-md-6 mb-3">
+                            <label class="form-label fw-bold small text-dark">대상 식재료 <span class="text-danger">*</span></label>
+                            <input type="text" name="ingredient_name" class="form-control" placeholder="예: 쇠고기, 쌀, 배추김치" required>
+                        </div>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label fw-bold small text-dark">원산지 국가 표시 <span class="text-danger">*</span></label>
+                        <input type="text" name="origin_country" class="form-control" placeholder="예: 쇠고기(국내산 한우), 쌀(국내산)" required>
+                    </div>
+                    <div class="mb-0">
+                        <label class="form-label fw-bold small text-dark d-block mb-2">함유 알레르기 유발물질 체크 (19종)</label>
+                        <div class="row g-2">
+                            <?php foreach ($official_allergies as$alg): ?>
+                                <div class="col-4 col-md-3">
+                                    <div class="form-check">
+                                        <input class="form-check-input" type="checkbox" name="allergy_list[]" value="<?= $alg ?>" id="alg_<?= md5($alg) ?>">
+                                        <label class="form-check-label small" for="alg_<?= md5($alg) ?>"><?= $alg ?></label>
+                                    </div>
+                                </div>
+                            <?php endforeach; ?>
+                        </div>
+                    </div>
+                </div>
+                <div class="modal-footer bg-light py-2 px-3 border-top">
+                    <button type="button" class="btn btn-secondary btn-sm rounded-pill px-3" data-bs-dismiss="modal">취소</button>
+                    <button type="submit" class="btn btn-primary btn-sm rounded-pill px-4 fw-bold">등록하기</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+<?php endif; ?>
+
+<?php
+include_once 'footer.php';
+?>
+</body>
+</html>

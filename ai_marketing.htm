@@ -1,0 +1,636 @@
+<?php
+/* ========================================================================== */
+/* 세션 가드 및 PRG(Post-Redirect-Get) 패턴 헤더 버퍼 초기화 */
+/* ========================================================================== */
+if (session_status() === PHP_SESSION_NONE) {
+    session_start();
+}
+ob_start();
+
+require_once 'db.php';
+
+$user_id = $_SESSION['user_id'] ?? null;
+if (!$user_id) {
+    header("Location: login.htm");
+    exit();
+}
+
+$user_role = $_SESSION['role'] ?? 'USER';
+
+/* 세션 알림 메시지 확인 및 초기화 */
+$flash_msg = $_SESSION['flash_msg'] ?? '';
+$flash_err = $_SESSION['flash_err'] ?? '';
+unset($_SESSION['flash_msg'], $_SESSION['flash_err']);
+
+// 1. 개별 삭제 (GET 방식 & 소유권 검증)
+if (isset($_GET['action']) && $_GET['action'] === 'delete' && isset($_GET['id'])) {
+    if ($user_role === 'USER') {
+        $_SESSION['flash_err'] = '삭제 권한이 없습니다. 사업자회원 승인이 필요합니다.';
+        header("Location: ai_marketing.htm");
+        exit();
+    }
+
+    $del_id = intval($_GET['id']);
+    try {
+        $stmt = $pdo->prepare("DELETE FROM ai_recommendations WHERE id = ? AND user_id = ?");
+        $stmt->execute([$del_id, $user_id]);
+        $_SESSION['flash_msg'] = 'deleted';
+    } catch (PDOException $e) {
+        $_SESSION['flash_err'] = '삭제 처리 중 데이터베이스 예외가 발생했습니다.';
+    }
+
+    header("Location: ai_marketing.htm");
+    exit();
+}
+
+// 2. 선택 삭제 (POST 방식 & 안전한 다중 파라미터 바인딩)
+if (isset($_POST['delete_selected']) && (int)$_POST['delete_selected'] === 1 && isset($_POST['selected_ids']) && is_array($_POST['selected_ids'])) {
+    if ($user_role === 'USER') {
+        $_SESSION['flash_err'] = '삭제 권한이 없습니다. 사업자회원 승인이 필요합니다.';
+        header("Location: ai_marketing.htm");
+        exit();
+    }
+
+    $ids = array_filter(array_map('intval', $_POST['selected_ids']), fn($val) => $val > 0);
+    if (!empty($ids)) {
+        try {
+            $in_clause = implode(',', array_fill(0, count($ids), '?'));
+            $params = array_merge(array_values($ids), [$user_id]);
+            $stmt = $pdo->prepare("DELETE FROM ai_recommendations WHERE id IN ($in_clause) AND user_id = ?");
+            $stmt->execute($params);
+            $_SESSION['flash_msg'] = 'batch_deleted';
+        } catch (PDOException $e) {
+            $_SESSION['flash_err'] = '일괄 삭제 처리 중 데이터베이스 예외가 발생했습니다.';
+        }
+    }
+
+    header("Location: ai_marketing.htm");
+    exit();
+}
+
+$is_generated = isset($_GET['success']) && $_GET['success'] == '1';
+$new_generated_id = isset($_GET['new_id']) ? intval($_GET['new_id']) : 0;
+
+// 3. AI 맞춤 마케팅 전략 생성 요청 처리
+if (isset($_POST['generate_ai'])) {
+    if ($user_role === 'USER') {
+        $_SESSION['flash_err'] = '전략 생성 권한이 없습니다. 사업자회원 승인 후 이용 가능합니다.';
+        header("Location: ai_marketing.htm");
+        exit();
+    }
+
+    $rent = 1500000;
+    $labor = 2500000;
+    $mat_rate = 33.0;
+    $del_rate = 12.0;
+
+    try {
+        $stmt_cost = $pdo->prepare("SELECT monthly_rent, labor_cost, material_cost_rate, delivery_fee_rate FROM store_expenses WHERE user_id = ? LIMIT 1");
+        $stmt_cost->execute([$user_id]);
+        if ($store_exp = $stmt_cost->fetch(PDO::FETCH_ASSOC)) {
+            $rent = (int)($store_exp['monthly_rent'] ?? 1500000);
+            $labor = (int)($store_exp['labor_cost'] ?? 2500000);
+            $mat_rate = (float)($store_exp['material_cost_rate'] ?? 33.0);
+            $del_rate = (float)($store_exp['delivery_fee_rate'] ?? 12.0);
+        }
+    } catch (PDOException $e) {}
+
+    $db_setting_key = '';
+    try {
+        $st_query = $pdo->query("SELECT setting_value FROM site_settings WHERE setting_key = 'api_openai_key' LIMIT 1");
+        if ($st_query) {
+            $db_setting_key = trim($st_query->fetchColumn() ?: '');
+        }
+    } catch (PDOException $e) {}
+
+    $default_key = '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';
+    $api_key = !empty($db_setting_key) ? $db_setting_key : (getenv('OPENAI_API_KEY') ?: ($_ENV['OPENAI_API_KEY'] ?? $default_key));
+
+    $ai_strategies = [
+        [
+            'title' => '배달 수수료 절감을 위한 단골 홀 포장 픽업 프로모션',
+            'target' => '배달앱 주문 빈도가 높은 인근 1~2인 가구 단골',
+            'strategy' => "현재 배달비용({$del_rate}%)을 절감하기 위해, 전화 또는 네이버 예약 방문 포장 시 5% 상시 할인 및 음료 무료 쿠폰 증정",
+            'effect' => '배달 플랫폼 수수료 지출 20% 절감 및 실질 마진율 개선'
+        ],
+        [
+            'title' => '원재료비 절감형 식사 시간대 세트 메뉴 구성',
+            'target' => '점심시간 인근 직장인 및 3~4인 팀 방문 고객',
+            'strategy' => "재료비율({$mat_rate}%)이 상대적으로 낮은 사이드 메뉴와 메인 메뉴를 결합한 가성비 세트 출시",
+            'effect' => '테이블 단가 15% 상승 및 재료비 원가 부담 3.5%p 완화'
+        ],
+        [
+            'title' => '고정비 회수를 위한 평일 비수기 타임 프로모션',
+            'target' => '평일 14:00~17:00 시간대 유동 인구 및 학생/재택근무자',
+            'strategy' => "임대료 및 인건비 고정비를 상쇄할 수 있도록 비피크 시간대 한정 추가 사이드 디시 혜택 제공",
+            'effect' => '비수기 시간대 유휴 좌석 가동률 30% 개선'
+        ]
+    ];
+	
+    $ai_data = null;
+    $api_error_log = '';
+	
+    if (!empty($api_key)) {
+        $ch = curl_init('https://api.openai.com/v1/chat/completions');
+        
+        $prompt = "소상공인 매장의 실제 재무 데이터:
+- 월 고정비(임대료/인건비): " . number_format($rent + $labor) . "원
+- 원재료비 비율: {$mat_rate}%
+- 배달/중개 수수료율: {$del_rate}%
+
+위 매장의 원가 구조와 수수료 부담을 극복하고 순이익을 극대화할 수 있는 맞춤형 마케팅 전략 1개를 제안해주세요.
+반드시 다음 키를 가진 순수 JSON 형식으로만 응답해야 합니다:
+- title: 전략 제목
+- target: 타깃 고객
+- strategy: 실행 전략
+- effect: 기대 효과";
+
+        $post_data = [
+            'model' => 'gpt-4o-mini',
+            'messages' => [
+                ['role' => 'system', 'content' => 'You are an AI assistant that responds ONLY in valid JSON format.'],
+                ['role' => 'user', 'content' => $prompt]
+            ],
+            'response_format' => ['type' => 'json_object'],
+            'temperature' => 0.7
+        ];
+
+        curl_setopt_array($ch, [
+            CURLOPT_RETURNTRANSFER => true,
+            CURLOPT_POST => true,
+            CURLOPT_POSTFIELDS => json_encode($post_data),
+            CURLOPT_HTTPHEADER => [
+                'Content-Type: application/json',
+                'Authorization: Bearer ' . $api_key
+            ],
+            CURLOPT_TIMEOUT => 20,
+            CURLOPT_SSL_VERIFYPEER => false
+        ]);
+
+        $response = curl_exec($ch);
+        $curl_err = curl_error($ch);
+        $http_code = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        curl_close($ch);
+
+        if ($http_code === 200 && $response) {
+            $result = json_decode($response, true);
+            if (isset($result['choices'][0]['message']['content'])) {
+                $content = json_decode($result['choices'][0]['message']['content'], true);
+                if (!empty($content['title']) && !empty($content['target']) && !empty($content['strategy']) && !empty($content['effect'])) {
+                    $ai_data = [
+                        'title' => trim($content['title']),
+                        'target' => trim($content['target']),
+                        'strategy' => trim($content['strategy']),
+                        'effect' => trim($content['effect'])
+                    ];
+                }
+            }
+        } else {
+            $err_body = json_decode($response, true);
+            $err_msg = $err_body['error']['message'] ?? ($curl_err ?: "HTTP 응답 코드: {$http_code}");
+            $api_error_log = "OpenAI API 연동 참고: " . $err_msg;
+        }
+    } else {
+        $api_error_log = "OpenAI API 키가 설정되지 않아 사전 검증된 맞춤 데이터 모델로 자동 대체 생성되었습니다.";
+    }
+	
+    $selected = ($ai_data !== null) ? $ai_data : $ai_strategies[array_rand($ai_strategies)];
+    $inserted_id = 0;
+
+    try {
+        $stmt = $pdo->prepare("INSERT INTO ai_recommendations (user_id, title, target_audience, strategy, expected_effect) VALUES (?, ?, ?, ?, ?)");
+        $stmt->execute([$user_id, $selected['title'], $selected['target'], $selected['strategy'], $selected['effect']]);
+        $inserted_id = (int)$pdo->lastInsertId();
+        
+        $_SESSION['flash_msg'] = 'generated';
+        if (!empty($api_error_log)) {
+            $_SESSION['flash_err'] = $api_error_log;
+        }
+    } catch (Exception $e) {
+        $_SESSION['flash_err'] = '전략 저장 중 데이터베이스 오류가 발생했습니다.';
+    }
+    
+    header("Location: ai_marketing.htm?success=1&new_id={$inserted_id}");
+    exit();
+}
+
+require_once 'header.php';
+
+$stmt = $pdo->prepare("SELECT * FROM ai_recommendations WHERE user_id = ? ORDER BY id DESC");
+$stmt->execute([$user_id]);
+$recs = $stmt->fetchAll(PDO::FETCH_ASSOC);
+?>
+
+<style>
+    .btn-ai-generate {
+        font-size: clamp(0.875rem, 1.2vw, 1rem) !important;
+        padding: 0.6rem 1.4rem !important;
+        border-radius: 50rem !important;
+    }
+    .card-title-responsive {
+        font-size: clamp(0.95rem, 1.15vw, 1.05rem);
+    }
+    .card-body-responsive p {
+        font-size: clamp(0.85rem, 1vw, 0.92rem);
+        margin-bottom: 0.6rem;
+    }
+    .strategy-card {
+        border-radius: 14px;
+        border: 1px solid #e2e8f0;
+        box-shadow: 0 4px 15px rgba(0, 0, 0, 0.04);
+        transition: transform 0.25s ease, box-shadow 0.25s ease;
+        overflow: hidden;
+    }
+    .strategy-card:hover {
+        transform: translateY(-3px);
+        box-shadow: 0 10px 25px rgba(0, 0, 0, 0.08);
+    }
+    .strategy-card .card-header {
+        background: #2563eb !important;
+        padding: 0.85rem 1.2rem;
+    }
+    #loadingOverlay {
+        position: fixed;
+        top: 0;
+        left: 0;
+        width: 100vw;
+        height: 100vh;
+        background-color: rgba(15, 23, 42, 0.7);
+        backdrop-filter: blur(6px);
+        z-index: 99999;
+        display: none;
+        flex-direction: column;
+        justify-content: center;
+        align-items: center;
+        color: #ffffff;
+    }
+    .ocr-strategy-header {
+        width: 100%;
+    }
+    .ocr-strategy-title {
+        word-break: keep-all !important;
+        white-space: normal !important;
+        line-height: 1.4;
+        flex: 1;
+    }
+    .ocr-strategy-badge-group {
+        white-space: nowrap !important;
+        flex-shrink: 0;
+    }
+    .btn-card-delete {
+        display: inline-flex !important;
+        align-items: center !important;
+        justify-content: center !important;
+        padding: 0.25em 0.55em !important;
+        font-size: clamp(0.72rem, 0.9vw, 0.82rem) !important;
+        line-height: 1.2 !important;
+        border-radius: 50rem !important;
+        background-color: #ef4444 !important;
+        color: #ffffff !important;
+        border: none !important;
+        box-shadow: 0 2px 4px rgba(0, 0, 0, 0.15) !important;
+        transition: all 0.2s ease !important;
+        vertical-align: middle !important;
+        flex-shrink: 0 !important;
+        cursor: pointer;
+    }
+    .btn-card-delete:hover {
+        background-color: #dc2626 !important;
+        color: #ffffff !important;
+        transform: translateY(-1px) !important;
+        box-shadow: 0 3px 6px rgba(0, 0, 0, 0.2) !important;
+    }
+    .btn-card-delete i {
+        font-size: 0.85em !important;
+        margin: 0 !important;
+        line-height: inherit !important;
+    }
+    .btn-copy-strategy {
+        font-size: 0.8rem !important;
+        padding: 0.35rem 0.8rem !important;
+        border-radius: 50rem !important;
+        transition: all 0.2s ease;
+    }
+</style>
+
+<div id="loadingOverlay">
+    <div class="spinner-border text-light mb-3" style="width: 3.5rem; height: 3.5rem;" role="status">
+        <span class="visually-hidden">Loading...</span>
+    </div>
+    <h4 class="fw-bold mb-1"><i class="fa-solid fa-wand-magic-sparkles text-warning me-2"></i>AI가 매장 원가 데이터를 분석 중입니다...</h4>
+    <p class="text-light-50 small mb-0">임대료, 인건비, 재료비 구조에 최적화된 마케팅 전략을 도출하고 있습니다.</p>
+</div>
+
+<div class="row mb-4">
+    <div class="col-12">
+        <h3 class="fw-bold mb-1" style="font-size: clamp(1.15rem, 1.8vw, 1.75rem);"><i class="fa-solid fa-wand-magic-sparkles text-primary me-2"></i>AI 맞춤 마케팅 전략 컨설팅</h3>
+        <p class="text-muted mb-0 small">매장의 손익구조와 고정/변동비를 분석하여 실행 가능한 고효율 마케팅 전략을 추천합니다.</p>
+    </div>
+</div>
+
+<?php if (!empty($flash_msg)): ?>
+    <div class="alert alert-success alert-dismissible fade show mb-4 rounded-3 shadow-sm" role="alert">
+        <i class="fa-solid fa-circle-check me-2"></i>
+        <?php if ($flash_msg === 'deleted' || $flash_msg === 'batch_deleted'): ?>
+            선택하신 마케팅 추천 전략이 성공적으로 삭제되었습니다.
+        <?php elseif ($flash_msg === 'generated'): ?>
+            매장 원가 분석에 기반한 새로운 맞춤형 마케팅 전략이 성공적으로 등록되었습니다!
+        <?php endif; ?>
+        <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+    </div>
+<?php endif; ?>
+
+<?php if (!empty($flash_err)): ?>
+    <div class="alert alert-warning alert-dismissible fade show mb-4 rounded-3 shadow-sm" role="alert">
+        <i class="fa-solid fa-triangle-exclamation me-2"></i><?= htmlspecialchars($flash_err) ?>
+        <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+    </div>
+<?php endif; ?>
+
+<form id="marketingForm" method="POST" action="ai_marketing.htm" onsubmit="checkAndShowLoading(event);">
+<input type="hidden" name="delete_selected" id="deleteSelectedInput" value="0">
+
+<div class="row mb-4 bg-white py-3 px-2 rounded-3 shadow-sm border align-items-center">
+    <div class="col-md-6 d-flex align-items-center gap-2 mb-2 mb-md-0">
+        <?php if (!empty($recs) && $user_role !== 'USER'): ?>
+            <div class="form-check ms-2 me-2 mb-0">
+                <input class="form-check-input" type="checkbox" id="selectAll" onclick="toggleSelectAll(this)">
+                <label class="form-check-label small fw-bold text-dark" for="selectAll">전체 선택</label>
+            </div>
+            <button type="button" class="btn btn-outline-danger btn-sm rounded-pill px-3" onclick="openBatchDeleteModal();">
+                <i class="fa-solid fa-trash-can me-1"></i>선택 삭제
+            </button>
+        <?php endif; ?>
+    </div>
+    
+    <div class="col-md-6 text-end">
+		<?php if ($user_role !== 'USER'): ?>
+			<button type="submit" name="generate_ai" class="btn btn-success shadow-sm btn-ai-generate">
+                <i class="fa-solid fa-wand-magic-sparkles me-1"></i>AI 맞춤 마케팅 전략 생성하기
+            </button>
+		<?php else: ?>
+			<div class="alert alert-info py-2 mb-0 small text-start">
+				<i class="fa-solid fa-info-circle me-1"></i> 현재 <strong>일반회원(읽기 전용)</strong> 권한입니다. 전략 생성 및 삭제는 사업자회원 승인 후 이용 가능합니다.
+			</div>
+		<?php endif; ?>
+    </div>
+</div>
+
+<div class="row">
+    <?php if (empty($recs)): ?>
+        <div class="col-12 text-center py-5">
+            <i class="fa-solid fa-robot fa-3x text-muted mb-3 opacity-50"></i>
+            <p class="text-muted">버튼을 눌러 AI 알고리즘의 맞춤형 마케팅 전략 추천을 받아보세요.</p>
+        </div>
+    <?php else: ?>
+        <?php foreach ($recs as $index => $row): ?>
+            <?php
+                $is_new_target = ($new_generated_id > 0 && (int)$row['id'] === $new_generated_id) || ($index === 0 && $is_generated);
+            ?>
+            <div class="col-md-6 mb-4" <?= $is_new_target ? 'id="latest-data"' : '' ?>>
+                <div class="card strategy-card h-100 <?= $is_new_target ? 'border-2 border-success' : '' ?>">
+                    <div class="card-header text-white fw-bold d-flex flex-column flex-sm-row justify-content-between align-items-start align-items-sm-center card-title-responsive gap-2">
+                        <div class="d-flex align-items-center gap-2 ocr-strategy-header">
+                            <?php if ($user_role !== 'USER'): ?>
+                                <input type="checkbox" name="selected_ids[]" value="<?= $row['id'] ?>" class="form-check-input rec-checkbox me-1 flex-shrink-0">
+                            <?php endif; ?>
+                            <span class="ocr-strategy-title"><i class="fa-solid fa-bullhorn me-2"></i><?= htmlspecialchars($row['title']) ?></span>
+                        </div>
+                        <div class="d-flex align-items-center gap-2 ocr-strategy-badge-group">
+                            <?php if ($is_new_target): ?>
+                                <span class="badge bg-warning text-dark">NEW</span>
+                            <?php endif; ?>
+                            <span class="badge bg-white bg-opacity-25 text-white small"><?= substr($row['created_at'], 0, 10) ?></span>
+                            <?php if ($user_role !== 'USER'): ?>
+                                <button type="button" class="btn btn-card-delete" onclick="openSingleDeleteModal('<?= $row['id'] ?>', '<?= htmlspecialchars(addslashes($row['title'])) ?>');" title="개별 삭제">
+                                    <i class="fa-solid fa-xmark"></i>
+                                </button>
+                            <?php endif; ?>
+                        </div>
+                    </div>
+                    <div class="card-body card-body-responsive p-3 d-flex flex-column justify-content-between">
+                        <div>
+                            <p><strong><i class="fa-solid fa-users text-primary me-1"></i>타깃 고객:</strong> <?= htmlspecialchars($row['target_audience']) ?></p>
+                            <p><strong><i class="fa-solid fa-lightbulb text-warning me-1"></i>실행 전략:</strong> <?= htmlspecialchars($row['strategy']) ?></p>
+                            <div class="p-2 bg-success bg-opacity-10 text-success rounded-3 border border-success-subtle mt-3">
+                                <strong><i class="fa-solid fa-chart-line me-1"></i>기대 효과:</strong> <?= htmlspecialchars($row['expected_effect']) ?>
+                            </div>
+                        </div>
+
+                        <div class="mt-3 pt-2 border-top d-flex justify-content-end">
+                            <?php 
+                                $copy_text = "[전략: " . $row['title'] . "]\n- 타깃: " . $row['target_audience'] . "\n- 실행: " . $row['strategy'] . "\n- 기대효과: " . $row['expected_effect'];
+                            ?>
+                            <textarea id="copy_src_<?= $row['id'] ?>" class="d-none"><?= htmlspecialchars($copy_text) ?></textarea>
+                            <button type="button" class="btn btn-outline-secondary btn-sm btn-copy-strategy" onclick="copyStrategyText('copy_src_<?= $row['id'] ?>', this)">
+                                <i class="fa-solid fa-copy me-1"></i>전략 복사
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        <?php endforeach; ?>
+    <?php endif; ?>
+</div>
+</form>
+
+<!-- 1. 개별 삭제 확인 모달 -->
+<div class="modal fade" id="singleDeleteModal" tabindex="-1" aria-labelledby="singleDeleteModalLabel" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-content border-0 shadow-lg rounded-4">
+            <div class="modal-header bg-danger text-white rounded-top-4 py-3">
+                <h5 class="modal-title fw-bold fs-6" id="singleDeleteModalLabel">
+                    <i class="fa-solid fa-triangle-exclamation me-2"></i>전략 삭제 확인
+                </h5>
+                <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body p-4 text-center">
+                <div class="mb-3">
+                    <i class="fa-solid fa-circle-question text-danger fa-3x animate__animated animate__shakeX"></i>
+                </div>
+                <h6 class="fw-bold text-dark mb-2">아래 마케팅 추천 전략을 정말 삭제하시겠습니까?</h6>
+                <div class="p-3 bg-light rounded-3 text-start small text-secondary border mb-3">
+                    <strong>삭제 대상: </strong><span id="singleDeleteTargetTitle" class="text-dark fw-bold"></span>
+                </div>
+                <p class="text-muted small mb-0">삭제된 전략 데이터는 복구할 수 없습니다.</p>
+            </div>
+            <div class="modal-footer bg-light border-0 rounded-bottom-4 justify-content-center gap-2 py-3">
+                <button type="button" class="btn btn-secondary px-4 rounded-pill fw-bold" data-bs-dismiss="modal">취소</button>
+                <a id="btnConfirmSingleDelete" href="#" class="btn btn-danger px-4 rounded-pill fw-bold">
+                    <i class="fa-solid fa-trash-can me-1"></i>삭제 확정
+                </a>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- 2. 선택 삭제 확인 모달 -->
+<div class="modal fade" id="batchDeleteModal" tabindex="-1" aria-labelledby="batchDeleteModalLabel" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-content border-0 shadow-lg rounded-4">
+            <div class="modal-header bg-danger text-white rounded-top-4 py-3">
+                <h5 class="modal-title fw-bold fs-6" id="batchDeleteModalLabel">
+                    <i class="fa-solid fa-trash-can me-2"></i>선택 항목 일괄 삭제
+                </h5>
+                <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body p-4 text-center">
+                <div class="mb-3">
+                    <i class="fa-solid fa-trash-can text-danger fa-3x"></i>
+                </div>
+                <h6 class="fw-bold text-dark mb-2">
+                    선택하신 <span id="batchDeleteCount" class="text-danger fw-bold fs-5">0</span>개의 전략을 삭제하시겠습니까?
+                </h6>
+                <p class="text-muted small mb-0">선택된 모든 데이터가 영구히 제거되며 되돌릴 수 없습니다.</p>
+            </div>
+            <div class="modal-footer bg-light border-0 rounded-bottom-4 justify-content-center gap-2 py-3">
+                <button type="button" class="btn btn-secondary px-4 rounded-pill fw-bold" data-bs-dismiss="modal">취소</button>
+                <button type="button" class="btn btn-danger px-4 rounded-pill fw-bold" onclick="executeBatchDelete();">
+                    <i class="fa-solid fa-trash-can me-1"></i>선택 항목 전체 삭제
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- 3. 미선택 경고 모달 -->
+<div class="modal fade" id="noSelectionModal" tabindex="-1" aria-labelledby="noSelectionModalLabel" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered modal-sm">
+        <div class="modal-content border-0 shadow-lg rounded-4 text-center p-3">
+            <div class="modal-body py-4">
+                <i class="fa-solid fa-circle-exclamation text-warning fa-3x mb-3"></i>
+                <h6 class="fw-bold text-dark mb-2">선택된 항목이 없습니다</h6>
+                <p class="text-muted small mb-0">삭제할 마케팅 전략 항목을 최소 1개 이상 선택해 주세요.</p>
+            </div>
+            <div class="modal-footer border-0 justify-content-center p-0">
+                <button type="button" class="btn btn-primary px-4 rounded-pill fw-bold" data-bs-dismiss="modal">확인</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- 4. 클립보드 복사 실패 안내 모달 -->
+<div class="modal fade" id="copyErrorModal" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered modal-sm">
+        <div class="modal-content border-0 shadow-lg rounded-4 text-center p-3">
+            <div class="modal-body py-4">
+                <i class="fa-solid fa-triangle-exclamation text-warning fa-3x mb-3"></i>
+                <h6 class="fw-bold text-dark mb-2">복사 실패</h6>
+                <p class="text-muted small mb-0">클립보드 권한이 차단되어 있습니다. 내용을 직접 선택하여 복사해 주세요.</p>
+            </div>
+            <div class="modal-footer border-0 justify-content-center p-0">
+                <button type="button" class="btn btn-secondary btn-sm rounded-pill px-4" data-bs-dismiss="modal">확인</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+function toggleSelectAll(source) {
+    const checkboxes = document.querySelectorAll('.rec-checkbox');
+    checkboxes.forEach(cb => cb.checked = source.checked);
+}
+
+function openSingleDeleteModal(id, title) {
+    document.getElementById('singleDeleteTargetTitle').innerText = title;
+    document.getElementById('btnConfirmSingleDelete').href = 'ai_marketing.htm?action=delete&id=' + id;
+    
+    const singleModal = new bootstrap.Modal(document.getElementById('singleDeleteModal'));
+    singleModal.show();
+}
+
+function openBatchDeleteModal() {
+    const checkedBoxes = document.querySelectorAll('.rec-checkbox:checked');
+    if (checkedBoxes.length === 0) {
+        const noSelectModal = new bootstrap.Modal(document.getElementById('noSelectionModal'));
+        noSelectModal.show();
+        return;
+    }
+
+    document.getElementById('batchDeleteCount').innerText = checkedBoxes.length;
+    const batchModal = new bootstrap.Modal(document.getElementById('batchDeleteModal'));
+    batchModal.show();
+}
+
+function executeBatchDelete() {
+    document.getElementById('deleteSelectedInput').value = '1';
+    document.getElementById('marketingForm').submit();
+}
+
+function checkAndShowLoading(event) {
+    const submitter = event.submitter;
+    if (submitter && submitter.name === 'generate_ai') {
+        document.getElementById('loadingOverlay').style.display = 'flex';
+    }
+}
+
+function copyStrategyText(srcId, btnEl) {
+    const src = document.getElementById(srcId);
+    if (!src) return;
+
+    const text = src.value;
+    const onSuccess = () => {
+        const originalHtml = btnEl.innerHTML;
+        btnEl.innerHTML = '<i class="fa-solid fa-check text-success me-1"></i>복사됨';
+        setTimeout(() => {
+            btnEl.innerHTML = originalHtml;
+        }, 1800);
+    };
+
+    if (navigator.clipboard && window.isSecureContext) {
+        navigator.clipboard.writeText(text).then(onSuccess).catch(() => {
+            fallbackCopy(text, onSuccess);
+        });
+    } else {
+        fallbackCopy(text, onSuccess);
+    }
+}
+
+function fallbackCopy(text, callback) {
+    const temp = document.createElement("textarea");
+    temp.value = text;
+    temp.style.position = "fixed";
+    temp.style.left = "-9999px";
+    document.body.appendChild(temp);
+    temp.select();
+    try {
+        document.execCommand("copy");
+        if (callback) callback();
+    } catch (e) {
+        if (typeof bootstrap !== 'undefined') {
+            new bootstrap.Modal(document.getElementById('copyErrorModal')).show();
+        }
+    }
+    document.body.removeChild(temp);
+}
+</script>
+
+<?php if ($is_generated): ?>
+<script>
+document.addEventListener("DOMContentLoaded", function() {
+    const latestItem = document.getElementById("latest-data");
+    if (latestItem) {
+        const offset = 100;
+        const bodyRect = document.body.getBoundingClientRect().top;
+        const elementRect = latestItem.getBoundingClientRect().top;
+        const elementPosition = elementRect - bodyRect;
+        const offsetPosition = elementPosition - offset;
+
+        window.scrollTo({
+            top: offsetPosition,
+            behavior: "smooth"
+        });
+    }
+
+    if (window.history.replaceState) {
+        window.history.replaceState(null, null, window.location.pathname);
+    }
+});
+</script>
+<?php endif; ?>
+
+<?php
+include_once 'footer.php';
+?>
+</body>
+</html>

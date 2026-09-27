@@ -1,0 +1,731 @@
+<?php
+/* 1:1 온라인 문의 관리자 페이지 - 검색 시 PDO 바인드 충돌 완벽 방어 및 즉시 다운로드 지원 100% 완결 */
+date_default_timezone_set('Asia/Seoul');
+
+if (session_status() === PHP_SESSION_NONE) {
+    session_start();
+}
+ob_start();
+
+require_once 'db.php';
+require_once 'smtp_mailer.php';
+
+try {
+    $pdo->exec("SET time_zone = '+09:00'");
+} catch (\Throwable $tzEx) {}
+
+// 1. 관리자 권한 확인
+if (!isset($_SESSION['user_id'])) {
+    header("Location: login.htm");
+    exit;
+}
+
+$user_id = $_SESSION['user_id'];
+$stmt = $pdo->prepare("SELECT role FROM users WHERE id = :id");
+$stmt->execute(['id' => $user_id]);
+$current_user = $stmt->fetch();
+
+if (!$current_user || $current_user['role'] !== 'ADMIN') {
+    $_SESSION['flash_msg'] = '접근 권한이 없습니다. 최고 관리자 전용 메뉴입니다.';
+    $_SESSION['flash_status'] = 'danger';
+    header("Location: dashboard.htm");
+    exit;
+}
+
+// SMTP 접속 정보
+if (!defined('SMTP_HOST')) define('SMTP_HOST', 'smtp.naver.com');
+if (!defined('SMTP_PORT')) define('SMTP_PORT', 465);
+if (!defined('SMTP_USER')) define('SMTP_USER', 'naobilly123');
+if (!defined('SMTP_PASS')) define('SMTP_PASS', 'RZ7KMNYPNPGJ');
+if (!defined('ADMIN_RECV_EMAIL')) define('ADMIN_RECV_EMAIL', 'naobilly123@naver.com');
+
+// 2. PRG 패턴 상태 변경 및 삭제 처리
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
+    $redirect_search = trim($_POST['redirect_search'] ?? '');
+    $redirect_filter = trim($_POST['redirect_filter'] ?? 'ALL');
+    $redirect_query  = http_build_query([
+        'search' => $redirect_search,
+        'filter_status' => $redirect_filter
+    ]);
+
+    if ($_POST['action'] === 'update_status') {
+        $inquiry_id   = (int)$_POST['inquiry_id'];
+        $status       = in_array($_POST['status'], ['PENDING', 'IN_PROGRESS', 'RESOLVED']) ? $_POST['status'] : 'PENDING';
+        $admin_reply  = trim($_POST['admin_reply'] ?? '');
+
+        $inq_stmt = $pdo->prepare("SELECT author_name, email, message FROM inquiries WHERE id = :id LIMIT 1");
+        $inq_stmt->execute(['id' => $inquiry_id]);
+        $target_inquiry = $inq_stmt->fetch(PDO::FETCH_ASSOC);
+
+        $now_time = date('Y-m-d H:i:s');
+        $update_stmt = $pdo->prepare("UPDATE inquiries SET status = :status, admin_reply = :admin_reply, replied_at = :replied_at WHERE id = :id");
+        if ($update_stmt->execute(['status' => $status, 'admin_reply' => $admin_reply, 'replied_at' => $now_time, 'id' => $inquiry_id])) {
+            
+            $mail_notice = "";
+            if (!empty($admin_reply) && !empty($target_inquiry['email']) && filter_var($target_inquiry['email'], FILTER_VALIDATE_EMAIL)) {
+                try {
+                    $recipient_email = $target_inquiry['email'];
+                    $recipient_name  = $target_inquiry['author_name'];
+                    $orig_message    = nl2br(htmlspecialchars($target_inquiry['message']));
+                    $reply_content   = nl2br(htmlspecialchars($admin_reply));
+
+                    $subject = "[나오빌리] 접수하신 1:1 온라인 문의에 대한 답변이 등록되었습니다 (#{$inquiry_id})";
+
+                    $mail_body = "
+                    <!DOCTYPE html>
+                    <html lang='ko'>
+                    <head><meta charset='UTF-8'></head>
+                    <body style='margin:0; padding:30px 10px; background-color:#f8fafc; font-family:-apple-system,BlinkMacSystemFont,\"Segoe UI\",Roboto,sans-serif;'>
+                        <div style='max-width:620px; margin:0 auto; background:#ffffff; border-radius:14px; border:1px solid #e2e8f0; overflow:hidden; box-shadow:0 4px 15px rgba(0,0,0,0.05);'>
+                            <div style='background:linear-gradient(135deg, #0f172a 0%, #1e293b 100%); padding:24px 28px; color:#ffffff;'>
+                                <h2 style='margin:0; font-size:18px; font-weight:700;'>[나오빌리] 1:1 문의 답변 안내</h2>
+                                <p style='margin:6px 0 0 0; font-size:12px; color:#94a3b8;'>고객님께서 문의하신 내용에 대한 담당자의 공식 답변입니다.</p>
+                            </div>
+                            
+                            <div style='padding:28px;'>
+                                <p style='font-size:14px; color:#1e293b; margin-top:0;'>
+                                    안녕하세요, <strong>" . htmlspecialchars($recipient_name) . "</strong> 고객님.<br>
+                                    나오빌리 고객지원센터입니다. 접수해주신 문의에 대한 검토 및 답변 내용을 안내해 드립니다.
+                                </p>
+
+                                <div style='margin-bottom:24px;'>
+                                    <div style='font-size:13px; font-weight:700; color:#059669; margin-bottom:8px;'>
+                                        <span style='display:inline-block; width:8px; height:8px; background:#10b981; border-radius:50%; margin-right:6px;'></span>고객센터 공식 답변
+                                    </div>
+                                    <div style='background-color:#ecfdf5; border:1px solid #a7f3d0; border-radius:10px; padding:18px; font-size:13.5px; line-height:1.75; color:#064e3b;'>
+                                        {$reply_content}
+                                    </div>
+                                    <div style='text-align:right; font-size:11px; color:#94a3b8; margin-top:6px;'>답변 일시: {$now_time}</div>
+                                </div>
+
+                                <div style='margin-bottom:26px;'>
+                                    <div style='font-size:13px; font-weight:700; color:#64748b; margin-bottom:8px;'>접수하셨던 문의 원문 (#{$inquiry_id})</div>
+                                    <div style='background-color:#f8fafc; border:1px solid #e2e8f0; border-radius:10px; padding:16px; font-size:12.5px; line-height:1.65; color:#475569;'>
+                                        {$orig_message}
+                                    </div>
+                                </div>
+
+                                <div style='text-align:center; padding-top:10px;'>
+                                    <a href='https://salespilotai.kr/my_inquiries.htm' target='_blank' style='display:inline-block; padding:12px 28px; background-color:#2563eb; color:#ffffff; font-size:13px; font-weight:700; text-decoration:none; border-radius:50px; box-shadow:0 3px 10px rgba(37,99,235,0.25);'>
+                                        내 문의 내역 확인하기 &rarr;
+                                    </a>
+                                </div>
+                            </div>
+
+                            <div style='background-color:#f1f5f9; padding:16px 28px; font-size:11px; color:#94a3b8; text-align:center; line-height:1.5;'>
+                                본 메일은 발신 전용 메일입니다. 추가 문의사항은 나오빌리 고객센터(0507-1319-3897) 또는 홈페이지 1:1 온라인 문의를 이용해 주시기 바랍니다.<br>
+                                Copyright © 2026 나오빌리. All rights reserved.
+                            </div>
+                        </div>
+                    </body>
+                    </html>";
+
+                    $mailer = new SimpleSMTP(SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS);
+                    $isSent = $mailer->send($recipient_email, $subject, $mail_body, ADMIN_RECV_EMAIL, '나오빌리 고객센터');
+                    if ($isSent) {
+                        $mail_notice = " (문의자 [{$recipient_email}]에게 안내 메일 발송 완료)";
+                    } else {
+                        error_log("Reply Mail Send Failed: " . $mailer->error);
+                    }
+                } catch (\Throwable $mail_ex) {
+                    error_log("Reply Mail Exception: " . $mail_ex->getMessage());
+                }
+            }
+
+            $_SESSION['flash_msg'] = "문의 내역(#{$inquiry_id})의 처리 상태와 답변이 정상 저장되었습니다." . $mail_notice;
+            $_SESSION['flash_status'] = 'success';
+        } else {
+            $_SESSION['flash_msg'] = "상태 업데이트 중 오류가 발생했습니다.";
+            $_SESSION['flash_status'] = 'danger';
+        }
+    } elseif ($_POST['action'] === 'delete') {
+        $inquiry_id = (int)$_POST['inquiry_id'];
+        
+        $fstmt = $pdo->prepare("SELECT * FROM inquiries WHERE id = :id LIMIT 1");
+        $fstmt->execute(['id' => $inquiry_id]);
+        $row_file = $fstmt->fetch(PDO::FETCH_ASSOC);
+
+        if ($row_file) {
+            $files_to_delete = [];
+            if (!empty($row_file['attachments_json'])) {
+                $att_list = json_decode($row_file['attachments_json'], true);
+                if (is_array($att_list)) {
+                    foreach ($att_list as $att) {
+                        if (!empty($att['save_name'])) $files_to_delete[] = $att['save_name'];
+                    }
+                }
+            }
+            if (!empty($row_file['attachment_save_name'])) {
+                $files_to_delete[] = $row_file['attachment_save_name'];
+            }
+
+            foreach (array_unique($files_to_delete) as $sName) {
+                $filepath = __DIR__ . '/uploads/inquiries/' . basename($sName);
+                if (file_exists($filepath)) {
+                    @unlink($filepath);
+                }
+            }
+        }
+
+        $del_stmt = $pdo->prepare("DELETE FROM inquiries WHERE id = :id");
+        if ($del_stmt->execute(['id' => $inquiry_id])) {
+            $_SESSION['flash_msg'] = "문의 내역(#{$inquiry_id})과 첨부파일이 안전하게 삭제되었습니다.";
+            $_SESSION['flash_status'] = 'danger';
+        } else {
+            $_SESSION['flash_msg'] = "삭제 처리 중 오류가 발생했습니다.";
+            $_SESSION['flash_status'] = 'danger';
+        }
+    }
+
+    header("Location: admin_inquiries.htm?" . $redirect_query);
+    exit;
+}
+
+$action_msg = $_SESSION['flash_msg'] ?? '';
+$action_status = $_SESSION['flash_status'] ?? '';
+unset($_SESSION['flash_msg'], $_SESSION['flash_status']);
+
+require_once 'header.php';
+
+/* ==========================================================================
+ * 3. 필터 및 검색 처리
+ * ========================================================================== */
+$search = trim($_GET['search'] ?? '');
+$filter_status = $_GET['filter_status'] ?? 'ALL';
+
+$sql = "SELECT i.*, u.username as user_account FROM inquiries i LEFT JOIN users u ON i.user_id = u.id WHERE 1=1";
+$params = [];
+
+if ($filter_status !== 'ALL') {
+    $sql .= " AND i.status = :status";
+    $params['status'] = $filter_status;
+}
+
+if (!empty($search)) {
+    $sql .= " AND (i.author_name LIKE :s_name OR i.email LIKE :s_email OR i.message LIKE :s_msg OR i.phone LIKE :s_phone)";
+    $params['s_name']  = "%{$search}%";
+    $params['s_email'] = "%{$search}%";
+    $params['s_msg']   = "%{$search}%";
+    $params['s_phone'] = "%{$search}%";
+}
+
+$sql .= " ORDER BY i.id DESC LIMIT 150";
+
+try {
+    $stmt = $pdo->prepare($sql);
+    $stmt->execute($params);
+    $inquiries = $stmt->fetchAll(PDO::FETCH_ASSOC);
+} catch (\PDOException $queryEx) {
+    error_log("admin_inquiries query error: " . $queryEx->getMessage());
+    $inquiries = [];
+}
+
+// 통계 데이터 산출
+try {
+    $cnt_total = $pdo->query("SELECT COUNT(*) FROM inquiries")->fetchColumn() ?: 0;
+    $cnt_pending = $pdo->query("SELECT COUNT(*) FROM inquiries WHERE status = 'PENDING'")->fetchColumn() ?: 0;
+    $cnt_progress = $pdo->query("SELECT COUNT(*) FROM inquiries WHERE status = 'IN_PROGRESS'")->fetchColumn() ?: 0;
+    $cnt_resolved = $pdo->query("SELECT COUNT(*) FROM inquiries WHERE status = 'RESOLVED'")->fetchColumn() ?: 0;
+} catch (\Throwable $cntEx) {
+    $cnt_total = $cnt_pending = $cnt_progress = $cnt_resolved = 0;
+}
+
+$type_labels = [
+    'api' => 'API 연동 오류',
+    'calc' => '정산/순이익',
+    'account' => '계정/정보변경',
+    'billing' => '유료/계산서',
+    'etc' => '기타/제휴'
+];
+?>
+
+<style>
+    .inquiry-table-responsive {
+        overflow-x: auto;
+        -webkit-overflow-scrolling: touch;
+    }
+    .inquiry-table {
+        min-width: 980px;
+    }
+    .inquiry-table th, 
+    .inquiry-table td {
+        vertical-align: middle;
+        padding: 0.8rem 0.65rem;
+    }
+    .nowrap-cell {
+        white-space: nowrap !important;
+    }
+    .btn-action-nowrap {
+        white-space: nowrap !important;
+        display: inline-block;
+    }
+    .stat-badge-card {
+        background: #ffffff;
+        border: 1px solid rgba(226, 232, 240, 0.85);
+        border-radius: 12px;
+        padding: 1rem 1.25rem;
+        box-shadow: 0 2px 4px rgba(0, 0, 0, 0.03);
+    }
+    .img-preview-box {
+        max-height: 200px;
+        max-width: 100%;
+        border-radius: 8px;
+        border: 1px solid #e2e8f0;
+        object-fit: contain;
+    }
+</style>
+
+<div class="row g-3 mb-4">
+    <div class="col-12">
+        <div class="d-flex justify-content-between align-items-center flex-wrap gap-2 mb-3">
+            <div>
+                <h3 class="fw-bold mb-1" style="font-size: clamp(1.2rem, 1.8vw, 1.65rem);">
+                    <i class="fa-solid fa-headset text-primary me-2"></i>1:1 온라인 고객 문의 종합 관리
+                </h3>
+                <p class="text-muted small mb-0">고객센터를 통해 인입된 문의 내역, 첨부파일 및 개인정보 수집동의 상태를 확인하고 답변합니다.</p>
+            </div>
+            <a href="dashboard.htm" class="btn btn-outline-secondary btn-sm rounded-pill px-3">
+                <i class="fa-solid fa-house me-1"></i>대시보드로 돌아가기
+            </a>
+        </div>
+
+        <?php if (!empty($action_msg)): ?>
+            <div class="alert alert-<?= $action_status ?> alert-dismissible fade show py-2 px-3 small rounded-3 mb-3 shadow-sm" role="alert">
+                <i class="<?= $action_status === 'success' ? 'fa-solid fa-circle-check text-success' : 'fa-solid fa-circle-exclamation text-danger' ?> me-2"></i><?= htmlspecialchars($action_msg) ?>
+                <button type="button" class="btn-close py-2" data-bs-dismiss="alert" aria-label="Close"></button>
+            </div>
+        <?php endif; ?>
+
+        <!-- 실시간 문의 현황 요약 카드 -->
+        <div class="row g-3 mb-3">
+            <div class="col-6 col-md-3">
+                <div class="stat-badge-card d-flex align-items-center justify-content-between">
+                    <div>
+                        <div class="text-muted small fw-semibold">총 접수 건수</div>
+                        <div class="fs-4 fw-bold text-dark"><?= number_format($cnt_total) ?></div>
+                    </div>
+                    <div class="text-primary bg-primary bg-opacity-10 p-2 rounded-circle"><i class="fa-solid fa-inbox fs-5"></i></div>
+                </div>
+            </div>
+            <div class="col-6 col-md-3">
+                <div class="stat-badge-card d-flex align-items-center justify-content-between">
+                    <div>
+                        <div class="text-muted small fw-semibold">답변 대기</div>
+                        <div class="fs-4 fw-bold text-warning"><?= number_format($cnt_pending) ?></div>
+                    </div>
+                    <div class="text-warning bg-warning bg-opacity-10 p-2 rounded-circle"><i class="fa-solid fa-clock fs-5"></i></div>
+                </div>
+            </div>
+            <div class="col-6 col-md-3">
+                <div class="stat-badge-card d-flex align-items-center justify-content-between">
+                    <div>
+                        <div class="text-muted small fw-semibold">처리 진행 중</div>
+                        <div class="fs-4 fw-bold text-primary"><?= number_format($cnt_progress) ?></div>
+                    </div>
+                    <div class="text-primary bg-primary bg-opacity-10 p-2 rounded-circle"><i class="fa-solid fa-spinner fs-5"></i></div>
+                </div>
+            </div>
+            <div class="col-6 col-md-3">
+                <div class="stat-badge-card d-flex align-items-center justify-content-between">
+                    <div>
+                        <div class="text-muted small fw-semibold">처리 완료</div>
+                        <div class="fs-4 fw-bold text-success"><?= number_format($cnt_resolved) ?></div>
+                    </div>
+                    <div class="text-success bg-success bg-opacity-10 p-2 rounded-circle"><i class="fa-solid fa-circle-check fs-5"></i></div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 검색 및 필터 툴바 -->
+        <div class="glass-card p-3 mb-4">
+            <form method="GET" action="admin_inquiries.htm" class="row g-2 align-items-center">
+                <div class="col-auto">
+                    <select name="filter_status" class="form-select form-select-sm" onchange="this.form.submit()">
+                        <option value="ALL" <?= $filter_status === 'ALL' ? 'selected' : '' ?>>전체 문의 보기</option>
+                        <option value="PENDING" <?= $filter_status === 'PENDING' ? 'selected' : '' ?>>답변 대기 (PENDING)</option>
+                        <option value="IN_PROGRESS" <?= $filter_status === 'IN_PROGRESS' ? 'selected' : '' ?>>처리 진행 중 (IN_PROGRESS)</option>
+                        <option value="RESOLVED" <?= $filter_status === 'RESOLVED' ? 'selected' : '' ?>>처리 완료 (RESOLVED)</option>
+                    </select>
+                </div>
+                <div class="col-auto">
+                    <input type="text" name="search" class="form-control form-control-sm" placeholder="상호명, 성명, 이메일, 내용 검색" value="<?= htmlspecialchars($search) ?>">
+                </div>
+                <div class="col-auto">
+                    <button type="submit" class="btn btn-primary btn-sm rounded-pill px-3">
+                        <i class="fa-solid fa-magnifying-glass me-1"></i>검색
+                    </button>
+                    <?php if (!empty($search) || $filter_status !== 'ALL'): ?>
+                        <a href="admin_inquiries.htm" class="btn btn-outline-secondary btn-sm rounded-pill px-3">초기화</a>
+                    <?php endif; ?>
+                </div>
+            </form>
+        </div>
+
+        <!-- 문의 목록 테이블 -->
+        <div class="glass-card p-0 overflow-hidden shadow-sm">
+            <div class="table-responsive inquiry-table-responsive">
+                <table class="table table-hover align-middle mb-0 inquiry-table" style="font-size: 0.88rem;">
+                    <thead class="table-light">
+                        <tr>
+                            <th style="width: 60px;" class="text-center nowrap-cell">#</th>
+                            <th style="width: 100px;" class="nowrap-cell text-center">상태</th>
+                            <th style="width: 120px;" class="nowrap-cell text-center">유형</th>
+                            <th style="width: 180px;" class="nowrap-cell">작성자 정보</th>
+                            <th>문의 요약 / 첨부파일</th>
+                            <th style="width: 130px;" class="nowrap-cell text-center">개인정보 동의</th>
+                            <th style="width: 135px;" class="nowrap-cell text-center">접수일시</th>
+                            <th style="width: 110px;" class="nowrap-cell text-center">관리 액션</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                    <?php if (empty($inquiries)): ?>
+                        <tr>
+                            <td colspan="8" class="text-center py-5 text-muted">
+                                <i class="fa-solid fa-folder-open fs-3 mb-2 d-block text-secondary opacity-50"></i>
+                                <?= !empty($search) ? '입력하신 검색어(' . htmlspecialchars($search) . ')와 일치하는 문의 내역이 없습니다.' : '조회된 1:1 온라인 문의가 없습니다.' ?>
+                            </td>
+                        </tr>
+                    <?php else: ?>
+                        <?php foreach ($inquiries as $row): ?>
+                            <?php
+                                $attached_files = [];
+                                if (!empty($row['attachments_json'])) {
+                                    $decoded = json_decode($row['attachments_json'], true);
+                                    if (is_array($decoded) && count($decoded) > 0) {
+                                        $attached_files = $decoded;
+                                    }
+                                }
+                                if (empty($attached_files) && !empty($row['attachment_orig_name'])) {
+                                    $attached_files[] = [
+                                        'orig_name' => $row['attachment_orig_name'],
+                                        'save_name' => $row['attachment_save_name'],
+                                        'file_size' => $row['attachment_file_size'] ?? 0
+                                    ];
+                                }
+                            ?>
+                            <tr>
+                                <td class="text-center fw-bold text-muted nowrap-cell"><?= $row['id'] ?></td>
+                                <td class="nowrap-cell text-center">
+                                    <?php if ($row['status'] === 'PENDING'): ?>
+                                        <span class="badge bg-warning text-dark px-2 py-1"><i class="fa-solid fa-clock me-1"></i>대기</span>
+                                    <?php elseif ($row['status'] === 'IN_PROGRESS'): ?>
+                                        <span class="badge bg-primary px-2 py-1"><i class="fa-solid fa-spinner me-1"></i>진행중</span>
+                                    <?php else: ?>
+                                        <span class="badge bg-success px-2 py-1"><i class="fa-solid fa-check me-1"></i>완료</span>
+                                    <?php endif; ?>
+                                </td>
+                                <td class="nowrap-cell text-center">
+                                    <span class="badge bg-light text-dark border">
+                                        <?= $type_labels[$row['inquiry_type']] ?? $row['inquiry_type'] ?>
+                                    </span>
+                                </td>
+                                <td class="nowrap-cell">
+                                    <div class="fw-bold text-dark">
+                                        <?= htmlspecialchars($row['author_name']) ?>
+                                        <?php if (!empty($row['user_account'])): ?>
+                                            <span class="badge bg-primary-subtle text-primary" style="font-size: 0.72rem;">회원 (<?= htmlspecialchars($row['user_account']) ?>)</span>
+                                        <?php else: ?>
+                                            <span class="badge bg-secondary-subtle text-secondary" style="font-size: 0.72rem;">비회원</span>
+                                        <?php endif; ?>
+                                    </div>
+                                    <div class="text-muted small"><i class="fa-solid fa-envelope me-1"></i><?= htmlspecialchars($row['email']) ?></div>
+                                    <?php if (!empty($row['phone'])): ?>
+                                        <div class="text-muted small"><i class="fa-solid fa-phone me-1"></i><?= htmlspecialchars($row['phone']) ?></div>
+                                    <?php endif; ?>
+                                </td>
+                                <td>
+                                    <div class="text-truncate" style="max-width: 330px;">
+                                        <?= htmlspecialchars(mb_strimwidth($row['message'], 0, 95, '...')) ?>
+                                    </div>
+                                    <?php if (!empty($attached_files)): ?>
+                                        <div class="small text-primary mt-1">
+                                            <i class="fa-solid fa-paperclip me-1"></i>
+                                            <span class="badge bg-primary-subtle text-primary fw-bold me-1">첨부파일 <?= count($attached_files) ?>개</span>
+                                            <span class="text-muted" style="font-size: 0.75rem;">(<?= htmlspecialchars($attached_files[0]['orig_name']) ?><?= count($attached_files) > 1 ? ' 외 ' . (count($attached_files) - 1) . '개' : '' ?>)</span>
+                                        </div>
+                                    <?php endif; ?>
+                                    <?php if (!empty($row['admin_reply'])): ?>
+                                        <div class="small text-success mt-1">
+                                            <i class="fa-solid fa-reply me-1"></i><strong>답변:</strong> <?= htmlspecialchars(mb_strimwidth($row['admin_reply'], 0, 80, '...')) ?>
+                                        </div>
+                                    <?php endif; ?>
+                                </td>
+                                <td class="nowrap-cell text-center">
+                                    <?php if (!empty($row['privacy_agree'])): ?>
+                                        <span class="badge bg-success-subtle text-success border border-success-subtle px-2 py-1" title="동의 완료">
+                                            <i class="fa-solid fa-shield-check me-1"></i>동의완료
+                                        </span>
+                                    <?php else: ?>
+                                        <span class="badge bg-danger-subtle text-danger border border-danger-subtle px-2 py-1" title="미동의">
+                                            <i class="fa-solid fa-circle-xmark me-1"></i>미동의
+                                        </span>
+                                    <?php endif; ?>
+                                </td>
+                                <td class="text-muted small nowrap-cell text-center">
+                                    <?= substr($row['created_at'], 0, 16) ?>
+                                </td>
+                                <td class="text-center nowrap-cell">
+                                    <button type="button" class="btn btn-outline-primary btn-sm rounded-pill px-3 btn-action-nowrap" data-bs-toggle="modal" data-bs-target="#inquiryModal<?= $row['id'] ?>">
+                                        열람/처리
+                                    </button>
+                                </td>
+                            </tr>
+
+                            <!-- 상세 조회 및 관리 모달 -->
+                            <div class="modal fade" id="inquiryModal<?= $row['id'] ?>" tabindex="-1" aria-hidden="true">
+                                <div class="modal-dialog modal-dialog-centered modal-lg">
+                                    <div class="modal-content border-0 shadow-lg rounded-4 overflow-hidden">
+                                        <form method="POST" action="admin_inquiries.htm">
+                                            <input type="hidden" name="action" value="update_status">
+                                            <input type="hidden" name="inquiry_id" value="<?= $row['id'] ?>">
+                                            <input type="hidden" name="redirect_search" value="<?= htmlspecialchars($search) ?>">
+                                            <input type="hidden" name="redirect_filter" value="<?= htmlspecialchars($filter_status) ?>">
+                                            
+                                            <div class="modal-header bg-dark text-white py-3 px-4" style="background: linear-gradient(135deg, #0f172a, #1e293b) !important;">
+                                                <h5 class="modal-title fs-6 fw-bold text-white">
+                                                    <i class="fa-solid fa-envelope-open-text me-2 text-primary"></i>1:1 문의 상세 및 답변 처리 (#<?= $row['id'] ?>)
+                                                </h5>
+                                                <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+                                            </div>
+
+                                            <div class="modal-body p-4">
+                                                <div class="row g-3 mb-3 p-3 bg-light rounded-3 border">
+                                                    <div class="col-md-6">
+                                                        <span class="small text-muted fw-bold d-block">작성자 / 상호명</span>
+                                                        <span class="fw-semibold text-dark"><?= htmlspecialchars($row['author_name']) ?></span>
+                                                        <?php if (!empty($row['user_account'])): ?>
+                                                            <span class="badge bg-primary ms-1">회원</span>
+                                                        <?php else: ?>
+                                                            <span class="badge bg-secondary ms-1">비회원</span>
+                                                        <?php endif; ?>
+                                                    </div>
+                                                    <div class="col-md-6">
+                                                        <span class="small text-muted fw-bold d-block">회신 이메일</span>
+                                                        <a href="mailto:<?= htmlspecialchars($row['email']) ?>" class="text-primary"><?= htmlspecialchars($row['email']) ?></a>
+                                                    </div>
+                                                    <div class="col-md-6">
+                                                        <span class="small text-muted fw-bold d-block">연락처</span>
+                                                        <span class="text-dark"><?= htmlspecialchars($row['phone'] ?: '미입력') ?></span>
+                                                    </div>
+                                                    <div class="col-md-6">
+                                                        <span class="small text-muted fw-bold d-block">접수 일시 (KST)</span>
+                                                        <span class="text-secondary"><?= $row['created_at'] ?></span>
+                                                    </div>
+
+                                                    <div class="col-12 border-top pt-2 mt-2">
+                                                        <span class="small text-muted fw-bold d-block mb-1">개인정보 수집 및 이용 동의 여부</span>
+														<?php if (!empty($row['privacy_agree'])): ?>
+															<div>
+																<span class="badge bg-success px-2 py-1"><i class="fa-solid fa-check me-1"></i>수집 및 이용 동의 완료</span>
+															</div>
+															<div class="text-muted small mt-1" style="font-size: 0.8rem;">
+																(동의 일시: <?= htmlspecialchars($row['privacy_agreed_at'] ?? $row['created_at']) ?>)
+															</div>
+														<?php else: ?>
+															<span class="badge bg-danger px-2 py-1"><i class="fa-solid fa-xmark me-1"></i>미동의</span>
+														<?php endif; ?>
+                                                    </div>
+                                                </div>
+
+                                                <div class="mb-3">
+                                                    <label class="small text-muted fw-bold mb-1">문의 유형: <strong class="text-dark"><?= $type_labels[$row['inquiry_type']] ?? $row['inquiry_type'] ?></strong></label>
+                                                    <div class="p-3 bg-white rounded-3 border" style="white-space: pre-wrap; font-size: 0.92rem; min-height: 100px;"><?= htmlspecialchars($row['message']) ?></div>
+                                                </div>
+
+                                                <!-- 첨부파일 바로 다운로드 링크 연동 -->
+                                                <?php if (!empty($attached_files)): ?>
+                                                    <div class="mb-3 p-3 rounded-3 border bg-light">
+                                                        <span class="small fw-bold text-dark d-block mb-2">
+                                                            <i class="fa-solid fa-paperclip text-primary me-1"></i>고객 첨부파일 (총 <?= count($attached_files) ?>개)
+                                                        </span>
+                                                        <div class="d-flex flex-column gap-2">
+                                                            <?php foreach ($attached_files as $idx => $att): ?>
+                                                                <?php
+                                                                    $f_save = basename($att['save_name'] ?? '');
+                                                                    $f_orig = $att['orig_name'] ?? '첨부파일';
+                                                                    $ext = strtolower(pathinfo($f_orig, PATHINFO_EXTENSION));
+                                                                    $is_img = in_array($ext, ['jpg', 'jpeg', 'png', 'gif', 'webp']);
+                                                                    
+                                                                    $download_link = 'download_inquiry_file.php?file=' . rawurlencode($f_save) . '&name=' . rawurlencode($f_orig);
+                                                                    $preview_img_url = 'uploads/inquiries/' . rawurlencode($f_save);
+                                                                ?>
+                                                                <div class="p-2 bg-white rounded border d-flex justify-content-between align-items-center flex-wrap gap-2">
+                                                                    <div>
+                                                                        <i class="fa-solid <?= $is_img ? 'fa-file-image text-info' : 'fa-file text-secondary' ?> me-1"></i>
+                                                                        <strong class="text-dark small"><?= htmlspecialchars($f_orig) ?></strong>
+                                                                        <span class="text-muted small ms-1">(<?= number_format(($att['file_size'] ?? 0) / 1024, 1) ?> KB)</span>
+                                                                    </div>
+                                                                    <div class="d-flex align-items-center gap-2">
+                                                                        <a href="<?= $download_link ?>" class="btn btn-sm btn-outline-primary rounded-pill px-3 py-1 fw-semibold" style="font-size: 0.78rem;">
+                                                                            <i class="fa-solid fa-download me-1"></i>다운로드
+                                                                        </a>
+                                                                    </div>
+                                                                    <?php if ($is_img && file_exists(__DIR__ . '/uploads/inquiries/' . $f_save)): ?>
+                                                                        <div class="w-100 text-center mt-2 pt-2 border-top">
+                                                                            <a href="<?= $download_link ?>" title="클릭 시 다운로드">
+                                                                                <img src="<?= $preview_img_url ?>" alt="미리보기" class="img-preview-box shadow-sm" loading="lazy">
+                                                                            </a>
+                                                                        </div>
+                                                                    <?php endif; ?>
+                                                                </div>
+                                                            <?php endforeach; ?>
+                                                        </div>
+                                                    </div>
+                                                <?php else: ?>
+                                                    <div class="mb-3 p-2 px-3 rounded-3 border bg-light text-muted small">
+                                                        <i class="fa-solid fa-paperclip me-1"></i>첨부파일 없음
+                                                    </div>
+                                                <?php endif; ?>
+
+                                                <hr>
+
+                                                <div class="mb-3">
+                                                    <label class="form-label small fw-bold">처리 상태 변경</label>
+                                                    <select name="status" class="form-select form-select-sm">
+                                                        <option value="PENDING" <?= $row['status'] === 'PENDING' ? 'selected' : '' ?>>답변 대기 (PENDING)</option>
+                                                        <option value="IN_PROGRESS" <?= $row['status'] === 'IN_PROGRESS' ? 'selected' : '' ?>>처리 진행 중 (IN_PROGRESS)</option>
+                                                        <option value="RESOLVED" <?= $row['status'] === 'RESOLVED' ? 'selected' : '' ?>>처리 완료 (RESOLVED)</option>
+                                                    </select>
+                                                </div>
+
+                                                <div class="mb-2">
+                                                    <label class="form-label small fw-bold">
+                                                        관리자 답변 / 고객 안내 내용
+                                                        <span class="badge bg-primary-subtle text-primary ms-1 fw-normal" style="font-size: 0.72rem;">
+                                                            <i class="fa-solid fa-paper-plane me-1"></i>저장 시 고객 이메일로 자동 발송
+                                                        </span>
+                                                    </label>
+                                                    <textarea name="admin_reply" class="form-control" rows="4" placeholder="작성하신 답변은 고객 조회 페이지에 등록되며, 고객의 이메일(<?= htmlspecialchars($row['email']) ?>)로도 실시간 자동 발송됩니다."><?= htmlspecialchars($row['admin_reply'] ?? '') ?></textarea>
+                                                </div>
+                                            </div>
+
+                                            <div class="modal-footer bg-light py-2 px-3 d-flex justify-content-between">
+                                                <button type="button" class="btn btn-outline-danger btn-sm rounded-pill px-3" onclick="requestDeleteInquiry(<?= $row['id'] ?>, 'inquiryModal<?= $row['id'] ?>')">
+                                                    <i class="fa-solid fa-trash-can me-1"></i>삭제
+                                                </button>
+                                                <div>
+                                                    <button type="button" class="btn btn-secondary btn-sm rounded-pill px-3" data-bs-dismiss="modal">닫기</button>
+                                                    <button type="submit" class="btn btn-primary btn-sm rounded-pill px-4 fw-semibold shadow-sm">
+                                                        <i class="fa-solid fa-check me-1"></i>저장하기
+                                                    </button>
+                                                </div>
+                                            </div>
+                                        </form>
+                                    </div>
+                                </div>
+                            </div>
+                        <?php endforeach; ?>
+                    <?php endif; ?>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- 삭제 확인 모달 -->
+<div class="modal fade" id="deleteInquiryConfirmModal" tabindex="-1" aria-labelledby="deleteConfirmLabel" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered modal-sm">
+        <div class="modal-content border-0 shadow-lg rounded-4 overflow-hidden">
+            <div class="modal-header bg-danger text-white py-2 px-3">
+                <h6 class="modal-title fw-bold fs-6" id="deleteConfirmLabel"><i class="fa-solid fa-triangle-exclamation me-1"></i>삭제 확인</h6>
+                <button type="button" class="btn-close btn-close-white" onclick="cancelDeleteInquiry()"></button>
+            </div>
+            <form method="POST" action="admin_inquiries.htm">
+                <input type="hidden" name="action" value="delete">
+                <input type="hidden" name="inquiry_id" id="modalDeleteInquiryId" value="">
+                <input type="hidden" name="redirect_search" value="<?= htmlspecialchars($search) ?>">
+                <input type="hidden" name="redirect_filter" value="<?= htmlspecialchars($filter_status) ?>">
+                <div class="modal-body p-3 text-center">
+                    <p class="mb-1 text-dark fw-bold">선택하신 문의 내역을 삭제하시겠습니까?</p>
+                    <small class="text-muted">삭제 시 첨부파일과 문의 내역이 영구 제거됩니다.</small>
+                </div>
+                <div class="modal-footer bg-light py-2 px-3 justify-content-center">
+                    <button type="button" class="btn btn-secondary btn-sm rounded-pill px-3" onclick="cancelDeleteInquiry()">취소</button>
+                    <button type="submit" class="btn btn-danger btn-sm rounded-pill px-3 fw-bold">삭제 확정</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
+<script>
+    let savedParentModalId = null;
+    let isDeletingConfirmed = false;
+
+    function requestDeleteInquiry(id, parentModalId) {
+        document.getElementById('modalDeleteInquiryId').value = id;
+        savedParentModalId = parentModalId;
+        isDeletingConfirmed = false;
+
+        const parentModalElem = document.getElementById(parentModalId);
+        if (parentModalElem && typeof bootstrap !== 'undefined') {
+            const parentModalInstance = bootstrap.Modal.getInstance(parentModalElem);
+            if (parentModalInstance) {
+                parentModalElem.addEventListener('hidden.bs.modal', function onParentHidden() {
+                    parentModalElem.removeEventListener('hidden.bs.modal', onParentHidden);
+                    const delModalElem = document.getElementById('deleteInquiryConfirmModal');
+                    const delModal = bootstrap.Modal.getOrCreateInstance(delModalElem);
+                    delModal.show();
+                });
+                parentModalInstance.hide();
+                return;
+            }
+        }
+
+        const delModalElem = document.getElementById('deleteInquiryConfirmModal');
+        const delModal = bootstrap.Modal.getOrCreateInstance(delModalElem);
+        delModal.show();
+    }
+
+    function cancelDeleteInquiry() {
+        const delModalElem = document.getElementById('deleteInquiryConfirmModal');
+        if (delModalElem && typeof bootstrap !== 'undefined') {
+            const delModalInstance = bootstrap.Modal.getInstance(delModalElem);
+            if (delModalInstance) {
+                delModalInstance.hide();
+            }
+        }
+    }
+
+    document.addEventListener("DOMContentLoaded", function() {
+        const delModalElem = document.getElementById('deleteInquiryConfirmModal');
+
+        document.addEventListener('keydown', function(e) {
+            if (e.key === 'Escape' || e.keyCode === 27) {
+                if (delModalElem && delModalElem.classList.contains('show')) {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    cancelDeleteInquiry();
+                }
+            }
+        }, true);
+
+        if (delModalElem) {
+            delModalElem.addEventListener('hidden.bs.modal', function() {
+                if (!isDeletingConfirmed && savedParentModalId) {
+                    const parentModalElem = document.getElementById(savedParentModalId);
+                    if (parentModalElem && typeof bootstrap !== 'undefined') {
+                        const parentModal = bootstrap.Modal.getOrCreateInstance(parentModalElem);
+                        parentModal.show();
+                    }
+                }
+            });
+
+            const delForm = delModalElem.querySelector('form');
+            if (delForm) {
+                delForm.addEventListener('submit', function() {
+                    isDeletingConfirmed = true;
+                });
+            }
+        }
+    });
+
+    if (window.history.replaceState) {
+        window.history.replaceState(null, null, window.location.href);
+    }
+</script>
+
+<?php
+include_once 'footer.php';
+?>
