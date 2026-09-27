@@ -1,12 +1,10 @@
-<!-- [REFACTORED - 가로 스크롤 100% 제거 및 Full-Width 완벽 조치본] -->
+<!-- [REFACTORED - 가로 스크롤 100% 제거 및 BizProfit AI 브랜드 결합 최종본] -->
 <style>
-    /* 1. 가로 스크롤 유발 요소를 방지하기 위한 html, body 안전 규격 */
     html, body {
         max-width: 100% !important;
         overflow-x: hidden !important;
     }
 
-    /* 2. footer-section: 100vw 대신 100% 사용으로 스크롤바 두께 오차 완벽 해결 */
     .footer-section {
         background-color: #ffffff !important;
         border-top: 1px solid #e2e8f0 !important;
@@ -158,6 +156,11 @@
             <div class="small text-muted" style="line-height: 1.7;">
                 <p class="mb-1">
                     <span class="footer-item">
+                        <strong class="footer-label">서비스명 :</strong>
+                        <span class="footer-val fw-bold text-primary">BizProfit AI</span>
+                    </span>
+                    <span class="footer-divider">|</span>
+                    <span class="footer-item">
                         <strong class="footer-label">상호명 :</strong>
                         <span class="footer-val">나오빌리</span>
                     </span>
@@ -213,14 +216,13 @@
                 </p>
 
                 <p class="mt-2 mb-0 text-muted" style="font-size: 0.78rem;">
-                    Copyright © 2026 나오빌리. All rights reserved.
+                    Copyright © 2026 나오빌리 (BizProfit AI). All rights reserved.
                 </p>
             </div>
         </div>
     </div>
 </footer>
 
-<!-- 상위 컨테이너에 갇혀 있을 경우 자동으로 body 직속 자식으로 이동시켜 100% 꽉 채우고 가로 스크롤을 방지하는 스크립트 -->
 <script>
     (function() {
         const footer = document.getElementById('globalPageFooter');

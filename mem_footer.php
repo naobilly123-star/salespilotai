@@ -1,4 +1,4 @@
-<!-- [REFACTORED - 로그인/회원가입 다크 테마 전용 푸터] -->
+<!-- [REFACTORED - 로그인/회원가입 다크 테마 전용 푸터 (BizProfit AI 브랜드 결합 최종본)] -->
 <style>
     .login-footer {
         width: 100%;
@@ -74,7 +74,6 @@
 
     @media (max-width: 767.98px) {
         .login-footer {
-            /* 모바일 뷰포트에서 좌우 중앙 정렬 유지 및 안전 패딩 부여 */
             text-align: left;
             padding: 0 20px !important;
             box-sizing: border-box !important;
@@ -84,30 +83,29 @@
         .login-footer .txt-lbs-full { display: none !important; }
         .login-footer .txt-lbs-short { display: inline !important; }
 
-        /* 이용약관-고객센터 양 끝 달라붙음 및 글자 잘림 완전 해소 */
         .login-footer .policy-links {
             display: flex !important;
-            flex-wrap: wrap !important; /* 좁은 기기에서 화면 밖으로 넘치지 않도록 wrap 허용 */
-            row-gap: 6px !important;   /* 줄바꿈 시 상하 여백 확보 */
+            flex-wrap: wrap !important;
+            row-gap: 6px !important;
             justify-content: center !important;
             align-items: center !important;
-            white-space: normal !important; /* nowrap 해제 */
+            white-space: normal !important;
             margin: 0 auto 16px auto !important;
-            padding: 0 10px !important; /* 끝단 여백 확보 */
+            padding: 0 10px !important;
             width: 100% !important;
             max-width: 100% !important;
             box-sizing: border-box !important;
         }
         .login-footer .policy-links a {
-            font-size: 0.75rem !important; /* [보완] 스마트폰 뷰포트 맞춤 폰트 크기 최적화 */
+            font-size: 0.75rem !important;
             letter-spacing: -0.025em !important;
             padding: 2px 4px !important;
-            white-space: nowrap !important; /* 개별 메뉴명 자체는 쪼개지지 않도록 방지 */
+            white-space: nowrap !important;
             display: inline-block;
             flex-shrink: 0;
         }
         .login-footer .policy-divider {
-            margin: 0 5px !important; /* [보완] 구분선 간격 조절로 균형 유지 */
+            margin: 0 5px !important;
             font-size: 0.68rem !important;
             opacity: 0.6;
             flex-shrink: 0;
@@ -135,7 +133,6 @@
 
 <footer class="login-footer">
     <div class="policy-links">
-        <!-- [무한 로딩 방지 패치: no-loader 클래스 추가로 전역 AppLoader 이벤트 실행 차단] -->
         <a href="terms.htm" class="no-loader" onclick="openPolicyModal(event, 'terms.htm', '서비스 이용약관');">이용약관</a>
         <span class="policy-divider">|</span>
         <a href="privacy.htm" class="policy-highlight no-loader" onclick="openPolicyModal(event, 'privacy.htm', '개인정보처리방침');">개인정보처리방침</a>
@@ -149,6 +146,11 @@
 
     <div>
         <p class="mb-1">
+            <span class="footer-item">
+                <strong class="footer-label">서비스명 :</strong>
+                <span class="footer-val" style="color: #60a5fa !important; font-weight: 700;">BizProfit AI</span>
+            </span>
+            <span class="footer-divider">|</span>
             <span class="footer-item">
                 <strong class="footer-label">상호명 :</strong>
                 <span class="footer-val">나오빌리</span>
@@ -205,7 +207,7 @@
         </p>
 
         <p class="mt-2 mb-0 copyright-text">
-            Copyright © 2026 나오빌리. All rights reserved.
+            Copyright © 2026 나오빌리 (BizProfit AI). All rights reserved.
         </p>
     </div>
 </footer>
@@ -240,13 +242,11 @@
     let currentModalTargetUrl = '';
 
     function openPolicyModal(e, url, title) {
-        /* [무한 로딩 방지 패치 1: 이벤트 기본동작 및 상위 클릭 전파 즉각 중단] */
         if (e) {
             e.preventDefault();
             e.stopPropagation();
         }
 
-        /* [무한 로딩 방지 패치 2: 현재 창 또는 부모 창에 대기 중인 AppLoader 강제 해제] */
         if (window.AppLoader && typeof window.AppLoader.hide === 'function') {
             window.AppLoader.hide();
         }
@@ -263,7 +263,6 @@
             titleElem.innerHTML = '<i class="fa-solid fa-circle-info me-2 text-primary"></i>' + title;
         }
         if (frameElem) {
-            /* [무한 로딩 방지 패치 3: iframe 콘텐츠 로딩 완료 시점에 로더 2차 강제 종료 보장] */
             frameElem.onload = function() {
                 if (window.AppLoader && typeof window.AppLoader.hide === 'function') {
                     window.AppLoader.hide();

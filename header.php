@@ -1,7 +1,7 @@
 <?php
 /* ========================================================================== */
 /* 🌟 BizProfit AI 소상공인 매출분석 플랫폼 통합 공통 헤더 (header.php) */
-/* - 개인(예비창업자) vs 사업자(점주) 맞춤형 메뉴 분기 완비본 */
+/* - 브랜드명: BizProfit AI (비즈프로핏 AI) / 운영사: 나오빌리 */
 /* ========================================================================== */
 if (session_status() === PHP_SESSION_NONE) {
     session_start();
@@ -11,12 +11,9 @@ if (!isset($_SESSION['user_id'])) {
     exit;
 }
 
-// db.php를 header.php 내부에서 직접 로드하여 $pdo 보장
 require_once 'db.php';
 
-/* ========================================================================== */
 /* 본인 정보 및 회원 유형 식별 로직 */
-/* ========================================================================== */
 $my_user_info = [];
 $is_personal_account = false;
 $user_role = $_SESSION['role'] ?? 'USER';
@@ -27,7 +24,6 @@ if (isset($pdo) && isset($_SESSION['user_id'])) {
     $my_user_stmt->execute(['id' => $current_my_user_id]);
     $my_user_info = $my_user_stmt->fetch(PDO::FETCH_ASSOC) ?: [];
 
-    // 개인/예비창업자 여부 판별 (USER 권한이면서 사업자번호가 없거나 예비창업 등록된 경우)
     if ($user_role === 'USER') {
         $biz_type_str = $my_user_info['biz_type'] ?? '';
         $biz_no_str = trim($my_user_info['biz_no'] ?? '');
@@ -37,16 +33,14 @@ if (isset($pdo) && isset($_SESSION['user_id'])) {
     }
 }
 
-/* ========================================================================== */
 /* DB site_settings에서 실시간 SEO 메타 정보 동적 추출 */
-/* ========================================================================== */
 $seo_meta = [
-    'title'       => '나오빌리 - 소상공인 AI 매출분석 & 매장 경영 리포트',
-    'description' => '소상공인 및 예비 창업자를 위한 실시간 AI 손익분기점(BEP), 날씨 기반 수요예측, 수수료 차감 순이익 분석 및 맞춤형 마케팅 솔루션',
-    'keywords'    => '소상공인, 예비창업, 매출분석, 손익분기점, BEP계산, AI마케팅, 상권분석, 나오빌리',
-    'author'      => '나오빌리 팀',
+    'title'       => 'BizProfit AI - 소상공인 AI 매출분석 & 순이익 경영 리포트',
+    'description' => '소상공인과 예비 창업자를 위한 실시간 AI 손익분기점(BEP), 날씨 기반 수요예측, 수수료 차감 순이익 분석 및 맞춤형 마케팅 솔루션 (운영: 나오빌리)',
+    'keywords'    => 'BizProfit AI, 비즈프로핏, 나오빌리, 소상공인, 매출분석, 손익분기점, BEP계산, AI마케팅, 상권분석, 배달수수료절감',
+    'author'      => 'BizProfit AI (나오빌리)',
     'robots'      => 'index, follow',
-    'og_title'    => '나오빌리 - 소상공인 AI 매출분석 & 매장 경영 리포트',
+    'og_title'    => 'BizProfit AI - 소상공인 AI 매출분석 & 순이익 경영 리포트',
     'og_desc'     => '실시간 원가 분석 및 배달 플랫폼 수수료 차감 후 순수익 정밀 진단',
     'og_image'    => 'https://cdn-icons-png.flaticon.com/512/3135/3135715.png',
     'canonical'   => ''
@@ -95,6 +89,11 @@ $current_page = basename($_SERVER['PHP_SELF']);
         <meta property="og:url" content="<?= htmlspecialchars($seo_meta['canonical'], ENT_QUOTES, 'UTF-8') ?>">
         <link rel="canonical" href="<?= htmlspecialchars($seo_meta['canonical'], ENT_QUOTES, 'UTF-8') ?>">
     <?php endif; ?>
+
+    <meta name="twitter:card" content="summary_large_image">
+    <meta name="twitter:title" content="<?= htmlspecialchars($seo_meta['og_title'], ENT_QUOTES, 'UTF-8') ?>">
+    <meta name="twitter:description" content="<?= htmlspecialchars($seo_meta['og_desc'], ENT_QUOTES, 'UTF-8') ?>">
+    <meta name="twitter:image" content="<?= htmlspecialchars($seo_meta['og_image'], ENT_QUOTES, 'UTF-8') ?>">
 
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
@@ -607,7 +606,7 @@ $current_page = basename($_SERVER['PHP_SELF']);
                 const href = targetLink.getAttribute('href');
                 if (!href || href === '#' || href.startsWith('javascript:') || targetLink.getAttribute('target') === '_blank') return;
                 if (targetLink.hasAttribute('data-bs-toggle') || targetLink.classList.contains('no-loader')) return;
-                window.AppLoader.show('페이지를 불러오는 중입니다...', '나오빌리 분석 엔진과 동기화하고 있습니다.');
+                window.AppLoader.show('페이지를 불러오는 중입니다...', 'BizProfit AI 분석 엔진과 동기화하고 있습니다.');
             }, true);
 
             const toggler = document.querySelector('.navbar-toggler');
@@ -635,18 +634,18 @@ $current_page = basename($_SERVER['PHP_SELF']);
                 <div class="premium-spinner-inner"></div>
                 <div class="premium-spinner-center"><i class="fa-solid fa-chart-pie"></i></div>
             </div>
-            <div class="loader-text-title" id="loaderTitle"><i class="fa-solid fa-bolt text-warning"></i>나오빌리</div>
+            <div class="loader-text-title" id="loaderTitle"><i class="fa-solid fa-bolt text-warning"></i>BizProfit AI</div>
             <div class="loader-text-subtitle" id="loaderSubtitle">시스템 데이터를 안전하게 불러오는 중입니다...</div>
             <div class="loader-progress-bar-wrap"><div class="loader-progress-bar-fill"></div></div>
         </div>
     </div>
 
-    <!-- 네비게이션 헤더 -->
+    <!-- 네비게이션 헤더 (BizProfit AI 브랜드 통일) -->
     <nav class="navbar navbar-expand-lg navbar-dark navbar-custom sticky-top">
         <div class="container-fluid">
             <div class="d-flex align-items-center justify-content-between w-100 flex-wrap" style="overflow: visible;">
                 <a class="navbar-brand me-2 me-xl-4" href="dashboard.htm">
-                    <i class="fa-solid fa-chart-line"></i>나오빌리
+                    <i class="fa-solid fa-chart-line"></i>BizProfit AI
                 </a>
                 
                 <button class="navbar-toggler ms-auto" type="button" aria-controls="navbarNav" aria-expanded="false" aria-label="메뉴 토글">
@@ -686,9 +685,7 @@ $current_page = basename($_SERVER['PHP_SELF']);
                             </li>
 
                             <?php if ($is_personal_account): ?>
-                                <!-- ============================================================== -->
-                                <!-- [개인 / 예비창업자 맞춤 메뉴] 창업 시뮬레이션 및 상권/법률 특화 -->
-                                <!-- ============================================================== -->
+                                <!-- [개인 / 예비창업자 맞춤 메뉴] -->
                                 <?php 
                                     $p_sim_pages = ['bep_analysis.htm', 'ai_forecast.htm', 'benchmark.htm', 'competitor_intel.htm', 'table_turnover.htm'];
                                     $p_sim_active = in_array($current_page, $p_sim_pages);
@@ -738,11 +735,7 @@ $current_page = basename($_SERVER['PHP_SELF']);
                                 </li>
 
                             <?php else: ?>
-                                <!-- ============================================================== -->
-                                <!-- [사업자 / 점주 회원 맞춤 메뉴] 실매장 5대 핵심 경영·세무 풀가동 -->
-                                <!-- ============================================================== -->
-
-                                <!-- [그룹 1] AI 분석 & 수요 예측 -->
+                                <!-- [사업자 / 점주 회원 맞춤 메뉴] -->
                                 <?php 
                                     $group1_pages = ['store_diagnosis.htm', 'ai_forecast.htm', 'bep_analysis.htm', 'table_turnover.htm', 'benchmark.htm', 'competitor_intel.htm'];
                                     $group1_active = in_array($current_page, $group1_pages);
@@ -762,7 +755,6 @@ $current_page = basename($_SERVER['PHP_SELF']);
                                     </ul>
                                 </li>
 
-                                <!-- [그룹 2] 매출·원가·세무 정산 -->
                                 <?php 
                                     $group2_pages = ['daily_closing.htm', 'sales_calendar.htm', 'tax_report.htm', 'menu_pricing.htm', 'cost_inventory.htm', 'supplies_compare.htm', 'receipt_issuer.htm', 'utility_cost.htm', 'loan_repayment.htm'];
                                     $group2_active = in_array($current_page, $group2_pages);
@@ -786,7 +778,6 @@ $current_page = basename($_SERVER['PHP_SELF']);
                                     </ul>
                                 </li>
 
-                                <!-- [그룹 3] 마케팅·리뷰·CRM -->
                                 <?php 
                                     $group3_pages = ['ai_marketing.htm', 'ai_sns_generator.htm', 'review_sentiment.htm', 'review_ai_assistant.htm', 'crm_messaging.htm', 'loyalty_stamp.htm', 'place_seo_audit.htm'];
                                     $group3_active = in_array($current_page, $group3_pages);
@@ -807,7 +798,6 @@ $current_page = basename($_SERVER['PHP_SELF']);
                                     </ul>
                                 </li>
 
-                                <!-- [그룹 4] 노무·안전·행정 규제 방어 -->
                                 <?php 
                                     $group4_pages = ['labor_contract.htm', 'labor_cost_optimizer.htm', 'hygiene_compliance.htm', 'safety_insurance.htm', 'compliance_training.htm', 'compliance_calendar.htm', 'sop_manual.htm', 'allergy_origin_board.htm', 'cctv_compliance.htm', 'equipment_maintenance.htm', 'gov_subsidy.htm', 'commercial_lease.htm', 'turnaround_plan.htm', 'anomaly_alerts.htm'];
                                     $group4_active = in_array($current_page, $group4_pages);
@@ -843,7 +833,7 @@ $current_page = basename($_SERVER['PHP_SELF']);
                                 </li>
                             <?php endif; ?>
 
-                            <!-- 공통 고객 지원 및 실시간 소통 메뉴 -->
+                            <!-- 공통 메뉴 -->
                             <li class="nav-item">
                                 <a class="nav-link <?= $current_page == 'my_inquiries.htm' ? 'active' : '' ?>" href="my_inquiries.htm">
                                     <i class="fa-solid fa-comments"></i>내 1:1 문의
@@ -856,7 +846,7 @@ $current_page = basename($_SERVER['PHP_SELF']);
                                 </a>
                             </li>
 
-                            <!-- [그룹 5] 최고 관리자 전용 그룹 (ADMIN) -->
+                            <!-- 최고 관리자 전용 그룹 (ADMIN) -->
                             <?php if ($user_role === 'ADMIN'): ?>
                                 <?php 
                                     $admin_pages = ['admin_users.htm', 'admin_api_logs.htm', 'admin_sns_config.htm', 'admin_inquiries.htm', 'admin_notices.htm', 'admin_site_settings.htm'];
@@ -886,7 +876,7 @@ $current_page = basename($_SERVER['PHP_SELF']);
         </div>
     </nav>
 
-    <!-- 본인 전용 내 정보 수정 모달창 -->
+    <!-- 내 정보 수정 모달창 -->
     <div class="modal fade" id="myProfileModal" tabindex="-1" aria-labelledby="myProfileModalLabel" aria-hidden="true">
         <div class="modal-dialog modal-dialog-centered modal-lg">
             <div class="modal-content border-0 shadow-lg" style="border-radius: 20px; overflow: hidden; background: #ffffff;">

@@ -22,15 +22,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $user = $stmt->fetch();
 
         if ($user && password_verify($user_pw, $user['password'])) {
-            
-            /* 관리자 승인 상태(status) 검증 로직 */
             $user_status = $user['status'] ?? 'APPROVED';
             if ($user_status === 'PENDING') {
                 $error = '회원가입 승인 대기 중입니다. 최고 관리자 승인 후 로그인할 수 있습니다.';
             } elseif ($user_status === 'REJECTED') {
                 $error = '회원가입 신청이 거절되었습니다. 관리자에게 문의해 주세요.';
             } else {
-                // 승인완료(APPROVED) 상태인 경우 로그인 처리
                 $_SESSION['user_id'] = $user['id'];
                 $_SESSION['username'] = $user['username'];
                 $_SESSION['store_name'] = $user['store_name'];
@@ -45,7 +42,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 header("Location: dashboard.htm");
                 exit;
             }
-
         } else {
             $error = '아이디 또는 비밀번호가 올바르지 않습니다.';
         }
@@ -59,15 +55,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>로그인 - 나오빌리 소상공인 AI 매출분석 플랫폼</title>
+    <title>로그인 - BizProfit AI 소상공인 AI 매출분석 플랫폼</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
-    <!-- [디자인 개선] 현대적인 Pretendard 웹폰트 로드 -->
     <link rel="stylesheet" as="style" crossorigin href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.min.css" />
     
-    <!-- ========================================================================== -->
-    <!-- [DESIGN REFACTORING] 프리미엄 로그인 모던 스타일 및 고도화 반응형 CSS -->
-    <!-- ========================================================================== -->
     <style>
         :root {
             --primary-color: #2563eb;
@@ -102,7 +94,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             padding: 1.5rem 0;
         }
 
-        /* 글래스모피즘 프리미엄 카드 */
         .login-card {
             background: rgba(255, 255, 255, 0.98);
             backdrop-filter: blur(16px);
@@ -135,7 +126,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             margin-bottom: 0.45rem;
         }
 
-        /* 인풋 그룹 및 포커스 인터랙션 고도화 */
         .input-group-modern {
             background-color: #f8fafc;
             border: 1.5px solid #e2e8f0;
@@ -163,7 +153,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             color: #0f172a;
         }
 
-        /* 로그인 버튼 */
         .btn-modern-primary {
             background: linear-gradient(135deg, #2563eb, #1d4ed8);
             border: none;
@@ -180,11 +169,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             box-shadow: 0 6px 20px rgba(37, 99, 235, 0.45);
             color: #ffffff;
         }
-        .btn-modern-primary:active {
-            transform: translateY(0);
-        }
 
-        /* 링크 스타일 */
         .auth-link {
             color: var(--primary-color);
             text-decoration: none;
@@ -196,9 +181,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             text-decoration: underline;
         }
 
-        /* ========================================================================== */
-        /* 소셜 로그인 구분선 및 버튼 브랜드 디자인 스타일 */
-        /* ========================================================================== */
         .social-divider {
             display: flex;
             align-items: center;
@@ -247,9 +229,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             transform: translateY(-1.5px);
             box-shadow: 0 4px 10px rgba(0, 0, 0, 0.08);
         }
-        .btn-social:active {
-            transform: translateY(0);
-        }
 
         .btn-social .social-icon-wrapper {
             position: absolute;
@@ -261,7 +240,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             height: 22px;
         }
 
-        /* 카카오 공식 브랜드 색상 */
         .btn-social-kakao {
             background-color: #FEE500;
             color: #191919 !important;
@@ -271,7 +249,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             color: #000000 !important;
         }
 
-        /* 네이버 공식 브랜드 색상 */
         .btn-social-naver {
             background-color: #03C75A;
             color: #FFFFFF !important;
@@ -281,7 +258,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             color: #FFFFFF !important;
         }
 
-        /* 구글 공식 가이드라인 스타일 */
         .btn-social-google {
             background-color: #FFFFFF;
             color: #374151 !important;
@@ -303,14 +279,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 </head>
 <body>
 
-<!-- 로그인 폼 영역 -->
 <div class="main-wrapper">
     <div class="login-card">
         <div class="text-center mb-4">
             <div class="login-title mb-2">
-                <i class="fa-solid fa-chart-pie me-2"></i>나오빌리
+                <i class="fa-solid fa-chart-line me-2"></i>BizProfit AI
             </div>
-            <p class="text-muted small mb-0">소상공인 AI 매출분석 & 매장 경영 리포트</p>
+            <p class="text-muted small mb-0">소상공인 AI 매출분석 & 순이익 경영 리포트 (운영: 나오빌리)</p>
         </div>
 
         <?php if (!empty($error)): ?>
@@ -321,7 +296,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         <?php endif; ?>
 
         <form method="POST" action="login.htm">
-            <!-- 아이디 입력 필드 -->
             <div class="mb-3">
                 <label class="form-label form-label-responsive">아이디</label>
                 <div class="input-group input-group-modern">
@@ -330,7 +304,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 </div>
             </div>
 
-            <!-- 비밀번호 입력 필드 -->
             <div class="mb-3">
                 <label class="form-label form-label-responsive">비밀번호</label>
                 <div class="input-group input-group-modern">
@@ -339,7 +312,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 </div>
             </div>
 
-            <!-- 아이디 저장 및 비밀번호 재설정 링크 -->
             <div class="d-flex justify-content-between align-items-center mb-4 pt-1">
                 <div class="form-check mb-0">
                     <input type="checkbox" name="remember_me" class="form-check-input" id="rememberMe" <?= $is_remembered ? 'checked' : '' ?> style="cursor: pointer;">
@@ -348,19 +320,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 <a href="reset_pass.htm" class="auth-link form-label-responsive">비밀번호 재설정</a>
             </div>
 
-            <!-- 로그인 버튼 -->
             <button type="submit" class="btn btn-modern-primary w-100 mb-2 form-label-responsive">
                 로그인 <i class="fa-solid fa-arrow-right ms-1"></i>
             </button>
         </form>
 
-        <!-- ========================================================================== -->
-        <!-- 소셜 로그인 (카카오 / 네이버 / 구글) 연동 버튼 영역 -->
-        <!-- ========================================================================== -->
         <div class="social-divider">또는 간편 로그인</div>
 
         <div class="social-login-group">
-            <!-- 1. 카카오 로그인 버튼 -->
             <a href="oauth_redirect.php?provider=kakao" class="btn-social btn-social-kakao">
                 <span class="social-icon-wrapper">
                     <svg width="18" height="18" viewBox="0 0 24 24" fill="#000000">
@@ -370,7 +337,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 <span>카카오로 시작하기</span>
             </a>
 
-            <!-- 2. 네이버 로그인 버튼 -->
             <a href="oauth_redirect.php?provider=naver" class="btn-social btn-social-naver">
                 <span class="social-icon-wrapper">
                     <svg width="15" height="15" viewBox="0 0 24 24" fill="#FFFFFF">
@@ -380,7 +346,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 <span>네이버로 시작하기</span>
             </a>
 
-            <!-- 3. 구글 로그인 버튼 -->
             <a href="oauth_redirect.php?provider=google" class="btn-social btn-social-google">
                 <span class="social-icon-wrapper">
                     <svg width="18" height="18" viewBox="0 0 24 24">
@@ -394,7 +359,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             </a>
         </div>
 
-        <!-- 회원가입 전환 안내 -->
         <div class="text-center pt-3">
             <span class="text-muted small">계정이 없으신가요?</span>
             <a href="register.htm" class="auth-link form-label-responsive ms-1">회원가입 신청</a>
