@@ -1,0 +1,446 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>서비스 이용약관 | 나오빌리</title>
+    <!-- Bootstrap 5 CSS -->
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <!-- FontAwesome Icons -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <!-- Pretendard WebFont -->
+    <link rel="stylesheet" as="style" crossorigin href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.min.css" />
+
+    <!-- [REFACTORED - 공신력 있는 표준 전자상거래 약관 서식 스타일링] -->
+    <style>
+        body {
+            background-color: #f8fafc;
+            color: #1e293b;
+            font-family: 'Pretendard', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            line-height: 1.75;
+            letter-spacing: -0.015em;
+        }
+
+        ::-webkit-scrollbar { width: 8px; }
+        ::-webkit-scrollbar-track { background: #f1f5f9; }
+        ::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 4px; }
+        ::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
+
+        .terms-container {
+            max-width: 960px; /* 기본 화면에서 답답하지 않도록 900px -> 960px 확장 */
+            margin: 40px auto 60px;
+            background: #ffffff;
+            padding: 40px 42px; /* 좌우 패딩을 52px -> 42px로 최적화하여 여백 낭비 축소 */
+            border-radius: 16px;
+            box-shadow: 0 4px 20px rgba(15, 23, 42, 0.05);
+            border: 1px solid #e2e8f0;
+        }
+        .terms-header {
+            border-bottom: 2px solid #e2e8f0;
+            padding-bottom: 25px;
+            margin-bottom: 35px;
+        }
+        .terms-header h1 {
+            font-size: 1.85rem;
+            font-weight: 800;
+            color: #0f172a;
+            letter-spacing: -0.025em;
+        }
+        .terms-section {
+            margin-bottom: 32px;
+        }
+        .terms-section h2 {
+            font-size: 1.15rem;
+            font-weight: 700;
+            color: #0f172a;
+            margin-bottom: 12px;
+            display: flex;
+            align-items: center;
+        }
+        .terms-section h2::before {
+            content: "";
+            display: inline-block;
+            width: 4px;
+            height: 18px;
+            background-color: #2563eb;
+            margin-right: 10px;
+            border-radius: 2px;
+        }
+        .terms-section p, .terms-section li {
+            font-size: 0.94rem;
+            color: #475569;
+            margin-bottom: 8px;
+        }
+        .terms-section ul, .terms-section ol {
+            padding-left: 20px;
+            margin-bottom: 12px;
+        }
+        .highlight-box {
+            background-color: #eff6ff;
+            border-left: 4px solid #2563eb;
+            padding: 18px 22px;
+            border-radius: 8px;
+            margin-bottom: 28px;
+            font-size: 0.92rem;
+            color: #1e40af;
+        }
+        .appendix-card {
+            background: #f8fafc;
+            border: 1px solid #e2e8f0;
+            border-radius: 12px;
+            padding: 24px 26px;
+            margin-top: 40px;
+        }
+        .appendix-card h3 {
+            font-size: 1.05rem;
+            font-weight: 700;
+            color: #0f172a;
+            margin-bottom: 12px;
+        }
+        .appendix-list {
+            list-style: none;
+            padding-left: 0;
+            margin-bottom: 0;
+            font-size: 0.9rem;
+        }
+        .appendix-list li {
+            margin-bottom: 6px;
+        }
+
+        /* 모달 내부 팝업 화면 볼 때 양옆 과도한 여백 문제 완벽 해결 */
+        body.in-modal-mode {
+            background-color: #ffffff !important;
+        }
+        body.in-modal-mode .main-wrapper-container {
+            max-width: 100% !important;
+            padding: 0 !important;
+            margin: 0 !important;
+        }
+        body.in-modal-mode .terms-container {
+            margin: 0 !important;
+            padding: 28px 28px !important; /* 모달 내 좌우 균형감 있는 안정적 패딩 확보 */
+            box-shadow: none !important;
+            border: none !important;
+            border-radius: 0 !important;
+            max-width: 100% !important;
+            width: 100% !important;
+            box-sizing: border-box !important;
+        }
+        body.in-modal-mode .top-nav-bar {
+            display: none !important;
+        }
+        body.in-modal-mode .terms-header {
+            margin-bottom: 25px;
+            padding-bottom: 15px;
+        }
+        body.in-modal-mode .terms-header h1 {
+            font-size: 1.5rem !important;
+        }
+
+        @media (max-width: 768px) {
+            .terms-container {
+                padding: 22px 18px !important;
+                margin: 15px auto 30px !important;
+            }
+            .terms-header h1 {
+                font-size: 1.5rem;
+            }
+        }
+
+        /* 인쇄(Print) 시 양옆 여백 과다 및 불필요한 요소 완벽 최적화 */
+        @media print {
+            @page {
+                size: A4;
+                margin: 15mm 15mm 15mm 15mm; /* 인쇄 표준 여백 설정 */
+            }
+            body {
+                background: #ffffff !important;
+                color: #000000 !important;
+                font-size: 10pt;
+                line-height: 1.6;
+            }
+            .main-wrapper-container, .terms-container {
+                max-width: 100% !important;
+                width: 100% !important;
+                margin: 0 !important;
+                padding: 0 !important;
+                border: none !important;
+                box-shadow: none !important;
+            }
+            .top-nav-bar, .text-center.mt-4 {
+                display: none !important; /* 인쇄 시 불필요한 버튼/내비게이션 숨김 */
+            }
+            .terms-header {
+                padding-bottom: 15px !important;
+                margin-bottom: 20px !important;
+                border-bottom: 1.5pt solid #333 !important;
+            }
+            .terms-header h1 {
+                font-size: 18pt !important;
+                color: #000 !important;
+            }
+            .highlight-box {
+                background-color: #f8fafc !important;
+                border-left: 3pt solid #000 !important;
+                color: #000 !important;
+                padding: 10px 14px !important;
+                margin-bottom: 18px !important;
+            }
+            .terms-section h2 {
+                font-size: 12pt !important;
+                color: #000 !important;
+                margin-top: 15px !important;
+                page-break-after: avoid;
+            }
+            .terms-section h2::before {
+                background-color: #000 !important;
+            }
+            .terms-section p, .terms-section li {
+                color: #111 !important;
+                font-size: 9.5pt !important;
+            }
+            .appendix-card {
+                border: 1pt solid #ccc !important;
+                background: transparent !important;
+                padding: 15px !important;
+                margin-top: 20px !important;
+                page-break-inside: avoid;
+            }
+        }
+    </style>
+</head>
+<body>
+
+<!-- 모달 모드일 때 Bootstrap container의 여백 제약을 풀 수 있도록 고유 클래스(main-wrapper-container) 부여 -->
+<div class="container main-wrapper-container">
+    <div class="terms-container">
+        <div class="d-flex justify-content-between align-items-center mb-3 top-nav-bar">
+            <a href="/" target="_top" class="btn btn-outline-secondary btn-sm rounded-pill px-3">
+                <i class="fa-solid fa-arrow-left me-1"></i> 메인으로 돌아가기
+            </a>
+            <span class="badge bg-primary-subtle text-primary border border-primary-subtle px-3 py-2 rounded-pill">
+                시행일자: 2026년 09월 08일
+            </span>
+        </div>
+
+        <header class="terms-header">
+            <h1><i class="fa-solid fa-file-contract text-primary me-2"></i>나오빌리 서비스 이용약관</h1>
+            <p class="text-muted mb-0 small">
+                본 약관은 나오빌리가 제공하는 AI 순이익 분석 및 데이터 연동 서비스의 이용조건 및 절차 등에 관한 제반 사항을 규정합니다.
+            </p>
+        </header>
+
+        <div class="highlight-box">
+            <i class="fa-solid fa-circle-info me-2"></i>
+            <strong>이용자 유의사항</strong><br>
+            나오빌리는 투명하고 공정한 서비스를 제공하기 위해 공정거래위원회 표준약관 및 전자상거래법을 준수합니다. 본 서비스를 이용하시기 전 약관 내용을 반드시 확인해 주시기 바랍니다.
+        </div>
+
+        <section class="terms-section">
+            <h2>제1조 (목적)</h2>
+            <p>본 약관은 나오빌리(이하 "회사"라 합니다)가 운영하는 인터넷 웹사이트 및 온라인 플랫폼 서비스(이하 "서비스"라 합니다)를 이용함에 있어 "회사"와 "이용자"의 권리·의무 및 책임사항, 기타 필요한 사항을 규정함을 목적으로 합니다.</p>
+            <p class="text-muted small">※ PC통신, 모바일 웹/앱 및 무선 인터넷 등을 이용하는 전자상거래 및 온라인 서비스에 대해서도 그 성질에 반하지 않는 한 본 약관을 준용합니다.</p>
+        </section>
+
+        <section class="terms-section">
+            <h2>제2조 (용어의 정의)</h2>
+            <ol>
+                <li><strong>"서비스"</strong>란 회사가 웹사이트를 통해 제공하는 AI 매출/순이익 분석 대시보드, 홈택스 및 배달 플랫폼 연동 기능, 정산 리포트 및 관련 제반 부가서비스 일체를 의미합니다.</li>
+                <li><strong>"이용자"</strong>란 사이트에 접속하여 본 약관에 따라 회사가 제공하는 서비스를 이용하는 회원 및 비회원을 말합니다.</li>
+                <li><strong>"회원"</strong>이란 회사에 개인정보 및 사업자정보를 제공하여 회원등록을 한 자로서, 회사의 정보를 지속적으로 제공받으며 서비스를 계속적으로 이용할 수 있는 자를 말합니다.</li>
+                <li><strong>"아이디(ID)"</strong>란 회원의 식별과 서비스 이용을 위하여 회원이 정하고 회사가 승인하는 문자와 숫자의 조합(또는 이메일 주소)을 말합니다.</li>
+                <li><strong>"비밀번호"</strong>란 회원이 부여받은 아이디와 일치되는 회원임을 확인하고 회원의 권익 보호를 위해 회원 자신이 설정한 문자와 숫자의 조합을 말합니다.</li>
+            </ol>
+        </section>
+
+        <section class="terms-section">
+            <h2>제3조 (약관 등의 명시와 설명 및 개정)</h2>
+            <ol>
+                <li>회사는 본 약관의 내용과 상호 및 대표자 성명, 영업소 소재지 주소, 전화번호, 이메일 주소, 사업자등록번호, 통신판매업 신고번호, 개인정보보호책임자 등을 이용자가 쉽게 알 수 있도록 사이트의 초기 서비스화면(하단 푸터)에 게시합니다.</li>
+                <li>회사는 「약관의 규제에 관한 법률」, 「전자상거래 등에서의 소비자보호에 관한 법률」, 「정보통신망 이용촉진 및 정보보호 등에 관한 법률」 등 관련 법령을 위배하지 않는 범위에서 본 약관을 개정할 수 있습니다.</li>
+                <li>회사가 약관을 개정할 경우에는 적용일자 및 개정사유를 명시하여 현행약관과 함께 서비스 초기화면에 적용일자 7일 전부터(이용자에게 불리하거나 중대한 사항의 변경은 30일 전부터) 공지합니다.</li>
+                <li>회원이 개정약관 적용일까지 명시적인 거부 의사를 표시하지 아니한 경우 개정약관에 동의한 것으로 간주합니다.</li>
+            </ol>
+        </section>
+
+        <section class="terms-section">
+            <h2>제4조 (서비스의 내용 및 변경)</h2>
+            <ol>
+                <li>회사는 다음과 같은 업무를 수행합니다.
+                    <ul>
+                        <li>매장 매출·손익 데이터 수집, 분석 및 AI 기반 순이익 리포트 제공</li>
+                        <li>국세청 홈택스 및 배달 3사(배달의민족, 요기요, 쿠팡이츠 등) 오픈 API 연동 지원</li>
+                        <li>유료 멤버십 또는 데이터 정기구독 서비스</li>
+                        <li>기타 회사가 정하거나 추가 개발하여 이용자에게 제공하는 일체의 서비스</li>
+                    </ul>
+                </li>
+                <li>회사는 운영상, 기술상의 필요 또는 외부 제휴 플랫폼의 사정에 따라 제공할 서비스의 내용을 변경할 수 있으며, 변경 시 사전에 공지합니다.</li>
+            </ol>
+        </section>
+
+        <section class="terms-section">
+            <h2>제5조 (서비스의 중단)</h2>
+            <ol>
+                <li>회사는 컴퓨터 등 정보통신설비의 보수점검, 교체 및 고장, 통신의 두절, 천재지변 등 불가항력적 사유가 발생한 경우에는 서비스의 제공을 일시적으로 중단할 수 있습니다.</li>
+                <li>회사는 제1항의 사유로 서비스의 제공이 일시 중단됨으로 인하여 이용자가 입은 손해에 대하여 회사의 고의 또는 중과실이 없는 한 배상책임을 부담하지 않습니다.</li>
+            </ol>
+        </section>
+
+        <section class="terms-section">
+            <h2>제6조 (회원가입)</h2>
+            <ol>
+                <li>이용자는 회사가 정한 가입 양식에 따라 회원정보 및 사업자정보를 기입한 후 본 약관에 동의한다는 의사표시를 함으로써 회원가입을 신청합니다.</li>
+                <li>회사는 다음 각 호에 해당하지 않는 한 회원으로 등록을 승인합니다.
+                    <ul>
+                        <li>등록 내용에 허위, 기재누락, 오기가 있는 경우</li>
+                        <li>타인의 명의, 사업자등록번호 또는 결제정보를 도용한 경우</li>
+                        <li>회원 등록이 회사의 기술상 또는 업무상 현저히 지장이 있다고 판단되는 경우</li>
+                    </ul>
+                </li>
+            </ol>
+        </section>
+
+        <section class="terms-section">
+            <h2>제7조 (회원 탈퇴 및 자격 상실)</h2>
+            <ol>
+                <li>회원은 언제든지 회사에 회원탈퇴를 요청할 수 있으며, 회사는 관계 법령이 정한 절차에 따라 지체 없이 회원탈퇴를 처리합니다.</li>
+                <li>회원이 다음 각 호의 사유에 해당하는 경우, 회사는 회원자격을 제한, 정지 또는 상실시킬 수 있습니다.
+                    <ul>
+                        <li>가입 신청 시 허위 내용을 등록한 경우</li>
+                        <li>유료 서비스 이용 요금 등 채무를 정당한 사유 없이 불이행하는 경우</li>
+                        <li>타인의 서비스 이용을 방해하거나 회사의 정상적인 시스템 운영을 침해하는 경우</li>
+                    </ul>
+                </li>
+            </ol>
+        </section>
+
+        <section class="terms-section">
+            <h2>제8조 (이용요금 및 결제)</h2>
+            <ol>
+                <li>회사가 제공하는 서비스는 무료 서비스와 유료 서비스(정기구독 플랜 등)로 구분됩니다.</li>
+                <li>유료 서비스의 구체적인 이용료 및 결제 방식은 서비스 내 결제 안내 페이지에 고시된 기준을 따릅니다.</li>
+                <li>회원은 회사가 지정한 결제수단(신용카드, 계좌이체 등)을 통하여 적법하게 결제하여야 합니다.</li>
+            </ol>
+        </section>
+
+        <section class="terms-section">
+            <h2>제9조 (청약철회 및 환불 정책)</h2>
+            <ol>
+                <li>유료 서비스 계약을 체결한 회원은 「전자상거래 등에서의 소비자보호에 관한 법률」에 따라 계약 체결일 또는 서비스 개시일로부터 7일 이내에 청약철회(취소 및 전액 환불)를 요청할 수 있습니다.</li>
+                <li>단, 다음 각 호의 경우에는 청약철회가 제한될 수 있습니다.
+                    <ul>
+                        <li>결제 즉시 데이터 분석 보고서가 발송되거나 열람되어 디지털 콘텐츠의 사용이 이미 개시된 경우</li>
+                        <li>회원의 귀책사유로 서비스의 효용이 현저히 훼손된 경우</li>
+                    </ul>
+                </li>
+                <li>회원의 단순 변심으로 인한 중도 해지 시에는 이미 이용한 일수(또는 데이터 호출 횟수)에 해당하는 금액과 결제 수수료를 공제한 후 잔여 금액을 환불합니다.</li>
+                <li>회사는 환불 사유가 확정된 날부터 3영업일 이내에 대금 환급 절차를 진행합니다.</li>
+            </ol>
+        </section>
+
+        <section class="terms-section">
+            <h2>제10조 (오픈 API 연동 데이터의 취급)</h2>
+            <ol>
+                <li>본 서비스는 회원의 명시적인 위임과 인증 동의에 기반하여 국세청 홈택스, 배달 플랫폼 등의 외부 시스템 데이터를 수집·가공합니다.</li>
+                <li>회원은 연동에 필요한 인증키 및 계정정보를 진실하고 적법하게 관리하여야 하며, 외부 연동 기관의 정기점검, 네트워크 장애, 정책 변경으로 인한 데이터 수집 지연 등에 대해서는 회사의 고의 또는 중과실이 없는 한 면책됩니다.</li>
+            </ol>
+        </section>
+
+        <section class="terms-section">
+            <h2>제11조 (개인정보보호)</h2>
+            <ol>
+                <li>회사는 서비스 제공을 위해 필요한 최소한의 이용자 개인정보 및 사업자정보를 수집합니다.</li>
+                <li>회사는 이용자의 사전 동의 없이 수집된 개인정보를 목적 외로 이용하거나 제3자에게 제공하지 않으며, 상세한 관리 지침은 별도의 <strong>개인정보처리방침</strong>에 따릅니다.</li>
+            </ol>
+        </section>
+
+        <section class="terms-section">
+            <h2>제12조 (회사의 의무)</h2>
+            <ol>
+                <li>회사는 관련 법령과 본 약관을 준수하며, 지속적이고 안정적인 서비스 제공을 위해 최선의 노력을 다합니다.</li>
+                <li>회사는 이용자의 개인정보 및 영업 데이터를 안전하게 보호하기 위해 기술적·관리적 보안 대책을 강구합니다.</li>
+            </ol>
+        </section>
+
+        <section class="terms-section">
+            <h2>제13조 (이용자의 의무)</h2>
+            <p>이용자는 다음 각 호의 행위를 하여서는 안 됩니다.</p>
+            <ul>
+                <li>신청 또는 변경 시 허위 내용의 등록</li>
+                <li>타인의 개인정보, 사업자등록번호, 금융 결제정보의 무단 도용</li>
+                <li>회사가 게시한 데이터 및 소프트웨어의 무단 복제, 크롤링, 리버스 엔지니어링 행위</li>
+                <li>회사 및 제3자의 저작권 등 지식재산권을 침해하거나 명예를 손상시키는 행위</li>
+                <li>기타 공공질서 및 미풍양속에 위배되는 불법적 행위</li>
+            </ul>
+        </section>
+
+        <section class="terms-section">
+            <h2>제14조 (저작권의 귀속 및 권리)</h2>
+            <ol>
+                <li>회사가 독자적으로 개발한 대시보드 UI, AI 알고리즘, 시스템 설계 및 관련 저작물에 대한 지식재산권은 회사에 귀속됩니다.</li>
+                <li>이용자는 서비스를 이용함으로써 얻은 회사의 분석 결과 및 지적 산출물을 회사의 사전 승낙 없이 복제, 출판, 배포, 영리적 전재 등에 이용할 수 없습니다.</li>
+            </ol>
+        </section>
+
+        <section class="terms-section">
+            <h2>제15조 (면책조항)</h2>
+            <ol>
+                <li>회사는 천재지변, 기간통신사업자의 회선 장애, 관련 법령의 제·개정 등 불가항력으로 인하여 서비스를 제공할 수 없는 경우에는 서비스 제공에 관한 책임이 면제됩니다.</li>
+                <li>회사가 제공하는 AI 분석 리포트, 예상 순이익, 세무 추정치 등은 매장 운영의 참고 목적으로 제공되는 것이며, 이를 바탕으로 한 이용자의 경영적 의사결정 및 결과에 대한 최종 책임은 이용자 본인에게 있습니다.</li>
+            </ol>
+        </section>
+
+        <section class="terms-section">
+            <h2>제16조 (분쟁해결 및 관할법원)</h2>
+            <ol>
+                <li>회사와 이용자 간에 발생한 분쟁에 관하여는 대한민국 법령을 준거법으로 적용합니다.</li>
+                <li>서비스 이용과 관련하여 회사와 이용자 사이에 발생한 분쟁에 관한 소송은 민사소송법상의 관할법원에 제기합니다.</li>
+            </ol>
+        </section>
+
+        <div class="appendix-card">
+            <h3>부칙</h3>
+            <p class="mb-3 text-muted small">본 약관은 <strong>2026년 09월 08일</strong>부터 적용됩니다.</p>
+            <ul class="appendix-list">
+                <li><strong>상호명:</strong> 나오빌리</li>
+                <li><strong>대표자:</strong> 함민석</li>
+                <li><strong>사업장 소재지:</strong> 서울특별시 송파구 백제고분로46길 22, 2층 602호(송파동, 송파(家)하우스)</li>
+                <li><strong>사업자등록번호:</strong> 601-16-09294</li>
+                <li><strong>통신판매업신고번호:</strong> 제2023-서울송파-1582호</li>
+                <li><strong>고객센터:</strong> 0507-1319-3897</li>
+                <li><strong>이메일 문의:</strong> naobilly123@naver.com</li>
+                <li><strong>호스팅 제공자:</strong> 네이버클라우드(주)</li>
+            </ul>
+        </div>
+
+        <div class="text-center mt-4">
+            <button type="button" onclick="window.print();" class="btn btn-outline-dark rounded-pill px-4 me-2">
+                <i class="fa-solid fa-print me-1"></i> 약관 인쇄
+            </button>
+            <a href="/" target="_top" class="btn btn-primary rounded-pill px-4">
+                확인 및 메인 이동
+            </a>
+        </div>
+    </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+
+<script>
+    if (window.self !== window.top) {
+        document.body.classList.add('in-modal-mode');
+    }
+	
+    // [로더 100% 해제 안전장치]
+    if (window.AppLoader && typeof window.AppLoader.hide === 'function') window.AppLoader.hide();
+    if (window.parent && window.parent.AppLoader && typeof window.parent.AppLoader.hide === 'function') window.parent.AppLoader.hide();
+
+    if (window.self !== window.top) {
+        document.body.classList.add('in-modal-mode');
+        // service_intro.htm의 경우 푸터 래퍼 숨김 처리 유지
+        const footerWrap = document.getElementById('serviceFooterWrapper');
+        if (footerWrap) footerWrap.style.display = 'none';
+    }
+</script>
+</body>
+</html>

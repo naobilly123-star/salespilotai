@@ -1,0 +1,294 @@
+<?php
+/* ========================================================================== */
+/* 🧭 소상공인 폐업 방지 골든타임 & 턴어라운드 액션 플랜 (turnaround_plan.htm) */
+/* - 가용 유동성 및 보증금 대비 월 순손실 기준 생존 런웨이(Runway) 개월수 자동 진단 */
+/* - 중기부 희망리턴패키지(철거비 250만 지원) 등 단계별 회생 처방 제시 */
+/* ========================================================================== */
+if (session_status() === PHP_SESSION_NONE) {
+    session_start();
+}
+ob_start();
+
+require_once 'db.php';
+
+if (!isset($_SESSION['user_id'])) {
+    header("Location: login.htm");
+    exit;
+}
+
+$user_id = (int)$_SESSION['user_id'];
+$user_role = $_SESSION['role'] ?? 'USER';
+$store_name = $_SESSION['store_name'] ?? '내 매장';
+
+try {
+    $pdo->exec("
+        CREATE TABLE IF NOT EXISTS `store_turnaround_logs` (
+            `id` INT AUTO_INCREMENT PRIMARY KEY,
+            `user_id` INT NOT NULL,
+            `assessment_date` DATE NOT NULL COMMENT '진단 일자',
+            `cash_reserve` BIGINT NOT NULL DEFAULT 15000000 COMMENT '가용 비상 유동성 자금(원)',
+            `monthly_deficit` INT NOT NULL DEFAULT 1500000 COMMENT '월평균 순손실액(원, 흑자시 0)',
+            `deposit_amount` BIGINT NOT NULL DEFAULT 30000000 COMMENT '사업장 임차보증금(원)',
+            `runway_months` DECIMAL(4, 1) NOT NULL DEFAULT 10.0 COMMENT '생존 가능 런웨이(개월)',
+            `risk_grade` ENUM('NORMAL', 'CAUTION', 'WARNING', 'CRITICAL') DEFAULT 'CAUTION' COMMENT '위기 등급',
+            `prescribed_action` TEXT NULL COMMENT 'AI 경영 정상화 처방전',
+            `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            KEY `idx_user_date` (`user_id`, `assessment_date`)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+    ");
+} catch (PDOException $e) {}
+
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
+    if ($user_role === 'USER') {
+        $_SESSION['flash_err'] = '일반회원(읽기 전용)은 위기 진단 등록/삭제 권한이 없습니다.';
+        header("Location: turnaround_plan.htm");
+        exit;
+    }
+
+    if ($_POST['action'] === 'save_assessment') {
+        $cash_reserve = max(0, intval($_POST['cash_reserve'] ?? 10000000));
+        $monthly_deficit = max(0, intval($_POST['monthly_deficit'] ?? 0));
+        $deposit_amount = max(0, intval($_POST['deposit_amount'] ?? 20000000));
+        $date = trim($_POST['assessment_date'] ?? date('Y-m-d'));
+
+        $runway = 99.0;
+        if ($monthly_deficit > 0) {
+            $runway = round($cash_reserve / $monthly_deficit, 1);
+        }
+
+        $grade = 'NORMAL';
+        $prescription = "";
+        if ($monthly_deficit == 0) {
+            $grade = 'NORMAL';
+            $prescription = "현재 매장이 손익분기점을 넘어 흑자 또는 보합 상태를 유지 중입니다. 비상 예비자금을 지속 적립하세요.";
+        } elseif ($runway <= 3.0) {
+            $grade = 'CRITICAL';
+            $prescription = "생존 골든타임이 3개월 미만인 고위험 상태입니다. 보증금 차감을 막기 위해 임대인과 긴급 월세 협상을 진행하고, 즉시 정부 '희망리턴패키지' 원스톱 컨설팅을 신청하세요.";
+        } elseif ($runway <= 6.0) {
+            $grade = 'WARNING';
+            $prescription = "버틸 수 있는 기간이 6개월 미만입니다. 고단가 세트 출시로 객단가를 높이고, 배달앱 고비용 광고 옵션을 즉각 중단하여 고정 지출을 30% 감축하세요.";
+        } else {
+            $grade = 'CAUTION';
+            $prescription = "아직 6개월 이상의 방어 여력이 있으나 적자가 지속되고 있습니다. 식자재 직거래 전환과 피크타임 단기 파트타이머 배치로 손익분기점을 낮추세요.";
+        }
+
+        try {
+            $ins = $pdo->prepare("
+                INSERT INTO store_turnaround_logs 
+                (user_id, assessment_date, cash_reserve, monthly_deficit, deposit_amount, runway_months, risk_grade, prescribed_action) 
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            ");
+            $ins->execute([$user_id, $date, $cash_reserve, $monthly_deficit, $deposit_amount, $runway, $grade, $prescription]);
+            $_SESSION['flash_msg'] = "경영 위기 진단 및 회생 런웨이 분석이 완료되었습니다.";
+        } catch (PDOException $e) {
+            $_SESSION['flash_err'] = '진단 저장 중 오류가 발생했습니다.';
+        }
+    } elseif ($_POST['action'] === 'delete_log') {
+        $del_id = intval($_POST['log_id'] ?? 0);
+        try {
+            $del = $pdo->prepare("DELETE FROM store_turnaround_logs WHERE id = ? AND user_id = ?");
+            $del->execute([$del_id, $user_id]);
+            $_SESSION['flash_msg'] = '선택하신 진단 이력이 삭제되었습니다.';
+        } catch (PDOException $e) {
+            $_SESSION['flash_err'] = '삭제 처리 중 오류가 발생했습니다.';
+        }
+    }
+
+    header("Location: turnaround_plan.htm");
+    exit;
+}
+
+$flash_msg = $_SESSION['flash_msg'] ?? '';
+$flash_err = $_SESSION['flash_err'] ?? '';
+unset($_SESSION['flash_msg'], $_SESSION['flash_err']);
+
+$logs = [];
+try {
+    $stmt = $pdo->prepare("SELECT * FROM store_turnaround_logs WHERE user_id = ? ORDER BY id DESC LIMIT 10");
+    $stmt->execute([$user_id]);
+    $logs = $stmt->fetchAll(PDO::FETCH_ASSOC);
+} catch (PDOException $e) {}
+
+if (empty($logs)) {
+    $logs = [
+        [
+            'id' => 0, 'assessment_date' => date('Y-m-d'), 'cash_reserve' => 12000000,
+            'monthly_deficit' => 1500000, 'deposit_amount' => 25000000, 'runway_months' => 8.0,
+            'risk_grade' => 'CAUTION',
+            'prescribed_action' => '가용 현금 기준 8개월 생존 가능. 배달 수수료를 10% 이내로 방어하고 홀 포장 할인을 강화하여 손실 폭을 좁히세요.'
+        ]
+    ];
+}
+
+$latest_runway = !empty($logs) ? floatval($logs[0]['runway_months']) : 8.0;
+
+require_once 'header.php';
+?>
+
+<style>
+    .turn-title-responsive { font-size: clamp(1.15rem, 1.8vw, 1.75rem) !important; font-weight: 800 !important; color: #0f172a; }
+    .turn-card { border-radius: 16px; border: 1px solid #e2e8f0; box-shadow: 0 4px 15px rgba(0, 0, 0, 0.04); background: #ffffff; }
+    .turn-scroll-wrapper { width: 100%; overflow-x: auto !important; -webkit-overflow-scrolling: touch; padding-bottom: 6px; }
+    .turn-detail-table { min-width: 860px !important; width: 100% !important; }
+    .turn-detail-table th, .turn-detail-table td { white-space: nowrap !important; vertical-align: middle !important; padding: 0.85rem 0.95rem !important; }
+    .turn-detail-table td.text-wrap-cell { white-space: normal !important; min-width: 260px; word-break: keep-all; line-height: 1.5; }
+</style>
+
+<div class="row mb-4 align-items-center">
+    <div class="col-md-7">
+        <h3 class="fw-bold mb-1 turn-title-responsive">
+            <i class="fa-solid fa-life-ring text-danger me-2"></i>소상공인 폐업 방지 골든타임 & 턴어라운드 액션 플랜
+        </h3>
+        <p class="text-muted mb-0 small">
+            보증금과 가용 유동성 자금을 기준으로 매장이 버틸 수 있는 생존 기간(Runway)을 진단하고 단계별 회생 처방을 안내합니다.
+        </p>
+    </div>
+    <div class="col-md-5 text-md-end mt-3 mt-md-0">
+        <?php if ($user_role !== 'USER'): ?>
+            <button type="button" class="btn btn-danger rounded-pill px-3 py-2 fw-semibold small shadow-sm" data-bs-toggle="modal" data-bs-target="#addAssessmentModal">
+                <i class="fa-solid fa-heart-pulse me-1"></i>생존 골든타임 자가진단
+            </button>
+        <?php else: ?>
+            <span class="badge bg-light text-secondary border px-3 py-2 rounded-pill small">일반회원(표준 모델 열람 모드)</span>
+        <?php endif; ?>
+    </div>
+</div>
+
+<?php if ($flash_msg): ?>
+    <div class="alert alert-success alert-dismissible fade show rounded-3 mb-4 shadow-sm small" role="alert">
+        <i class="fa-solid fa-circle-check me-2 text-success"></i><?= htmlspecialchars($flash_msg) ?>
+        <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+    </div>
+<?php endif; ?>
+
+<div class="row g-3 mb-4">
+    <div class="col-md-4">
+        <div class="turn-card p-3 border-start border-4 border-danger h-100">
+            <div class="d-flex justify-content-between align-items-center mb-1">
+                <span class="text-muted small fw-bold">생존 방어 가능 기간 (Runway)</span>
+                <i class="fa-solid fa-hourglass-half text-danger fs-5"></i>
+            </div>
+            <div class="fs-4 fw-bold text-danger mb-1"><?= $latest_runway >= 99 ? '흑자 지속 (충분)' : number_format($latest_runway, 1) . '개월' ?></div>
+            <small class="text-secondary">현재 비상금으로 순손실을 감당할 수 있는 한계 시점</small>
+        </div>
+    </div>
+    <div class="col-md-4">
+        <div class="turn-card p-3 border-start border-4 border-warning h-100">
+            <div class="d-flex justify-content-between align-items-center mb-1">
+                <span class="text-muted small fw-bold">보증금 보존 마지노선</span>
+                <i class="fa-solid fa-vault text-warning fs-5"></i>
+            </div>
+            <div class="fs-4 fw-bold text-warning-emphasis mb-1">보증금 잠식 방지</div>
+            <small class="text-secondary">월세 연체로 보증금이 깎이기 전 회생/철거 결정 필요</small>
+        </div>
+    </div>
+    <div class="col-md-4">
+        <div class="turn-card p-3 border-start border-4 border-success h-100">
+            <div class="d-flex justify-content-between align-items-center mb-1">
+                <span class="text-muted small fw-bold">정부 희망리턴패키지</span>
+                <i class="fa-solid fa-handshake-angle text-success fs-5"></i>
+            </div>
+            <div class="fs-4 fw-bold text-success mb-1">점포철거비 최대 250만 원</div>
+            <small class="text-secondary">중기부 국비 무상지원 (재창업 및 전직 장려금)</small>
+        </div>
+    </div>
+</div>
+
+<div class="row mb-4">
+    <div class="col-12">
+        <div class="glass-card p-4">
+            <h5 class="fw-bold mb-3 text-dark"><i class="fa-solid fa-clipboard-list text-primary me-2"></i>경영 위기 진단 이력 및 AI 턴어라운드 액션 플랜</h5>
+            <div class="turn-scroll-wrapper">
+                <table class="table table-hover align-middle turn-detail-table mb-0">
+                    <thead class="table-light">
+                        <tr>
+                            <th style="width: 12%;">진단 일자</th>
+                            <th style="width: 14%;" class="text-center">위기 판정 등급</th>
+                            <th style="width: 15%;" class="text-end">가용 비상 유동성</th>
+                            <th style="width: 14%;" class="text-end">월 순손실액</th>
+                            <th style="width: 13%;" class="text-center">생존 런웨이</th>
+                            <th style="width: 24%;">AI 단계별 회생 액션 처방</th>
+                            <th style="width: 8%;" class="text-center">관리</th>
+                        </tr>
+                    </thead>
+                    <tbody class="small">
+                        <?php foreach ($logs as $l): ?>
+                            <?php
+                                $g = $l['risk_grade'] ?? 'CAUTION';
+                                $badge_class = ($g === 'NORMAL') ? 'success' : (($g === 'CAUTION') ? 'info' : (($g === 'WARNING') ? 'warning text-dark' : 'danger'));
+                                $g_text = ($g === 'NORMAL') ? '안전 (정상)' : (($g === 'CAUTION') ? '주의 (적자발생)' : (($g === 'WARNING') ? '경고 (단기위험)' : '위험 (한계상태)'));
+                            ?>
+                            <tr>
+                                <td class="fw-bold text-dark"><?= htmlspecialchars($l['assessment_date']) ?></td>
+                                <td class="text-center"><span class="badge bg-<?= $badge_class ?> px-2 py-1 fs-7"><?= $g_text ?></span></td>
+                                <td class="text-end fw-semibold text-dark"><?= number_format($l['cash_reserve']) ?>원</td>
+                                <td class="text-end fw-semibold text-danger">
+                                    <?= ($l['monthly_deficit'] > 0) ? '-' . number_format($l['monthly_deficit']) . '원' : '흑자 유지' ?>
+                                </td>
+                                <td class="text-center fw-bold fs-6 text-<?= ($l['runway_months'] <= 3.0) ? 'danger' : 'primary' ?>">
+                                    <?= ($l['runway_months'] >= 99) ? '안정' : number_format($l['runway_months'], 1) . '개월' ?>
+                                </td>
+                                <td class="text-wrap-cell text-primary fw-semibold"><?= htmlspecialchars($l['prescribed_action']) ?></td>
+                                <td class="text-center">
+                                    <?php if ($user_role !== 'USER' && !empty($l['id'])): ?>
+                                        <form method="POST" action="turnaround_plan.htm" class="d-inline" onsubmit="return confirm('선택하신 진단 기록을 삭제하시겠습니까?');">
+                                            <input type="hidden" name="action" value="delete_log">
+                                            <input type="hidden" name="log_id" value="<?= (int)$l['id'] ?>">
+                                            <button type="submit" class="btn btn-outline-danger btn-sm rounded-pill px-2 py-0"><i class="fa-solid fa-trash-can"></i></button>
+                                        </form>
+                                    <?php else: ?>
+                                        <span class="text-muted">-</span>
+                                    <?php endif; ?>
+                                </td>
+                            </tr>
+                        <?php endforeach; ?>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+</div>
+
+<?php if ($user_role !== 'USER'): ?>
+<div class="modal fade" id="addAssessmentModal" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-content border-0 shadow-lg rounded-4 overflow-hidden">
+            <form method="POST" action="turnaround_plan.htm">
+                <input type="hidden" name="action" value="save_assessment">
+                <div class="modal-header bg-danger text-white py-3 px-4">
+                    <h5 class="modal-title fs-6 fw-bold text-white"><i class="fa-solid fa-heart-pulse me-2"></i>매장 생존 골든타임 자가진단</h5>
+                    <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body p-4">
+                    <div class="mb-3">
+                        <label class="form-label fw-bold small text-dark">진단 일자</label>
+                        <input type="date" name="assessment_date" class="form-control" value="<?= date('Y-m-d') ?>" required>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label fw-bold small text-dark">현재 가용 비상 유동성 자금 (통장 잔고 등, 원)</label>
+                        <input type="number" name="cash_reserve" class="form-control" value="12000000" required>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label fw-bold small text-dark">월평균 순손실액 (적자금액, 흑자시 0 입력, 원)</label>
+                        <input type="number" name="monthly_deficit" class="form-control" value="1500000" required>
+                    </div>
+                    <div class="mb-0">
+                        <label class="form-label fw-bold small text-dark">사업장 임차보증금 (원)</label>
+                        <input type="number" name="deposit_amount" class="form-control" value="25000000" required>
+                    </div>
+                </div>
+                <div class="modal-footer bg-light py-2 px-3 border-top">
+                    <button type="button" class="btn btn-secondary btn-sm rounded-pill px-3" data-bs-dismiss="modal">취소</button>
+                    <button type="submit" class="btn btn-danger btn-sm rounded-pill px-4 fw-bold">골든타임 진단하기</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+<?php endif; ?>
+
+<?php
+include_once 'footer.php';
+?>
+</body>
+</html>

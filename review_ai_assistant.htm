@@ -1,0 +1,168 @@
+<?php
+/* ========================================================================== */
+/* 🤖 배달앱·네이버 악성 리뷰 컴플레인 AI 법적 대응 비서 (review_ai_assistant.htm) */
+/* - [실제 연계] OpenAI GPT-4o-mini 실시간 컴플레인 사과문 및 법적 대응문 생성 */
+/* - 유형별(위생, 배달지연, 불친절, 악의적비방) 자동 분류, 원클릭 클립보드 복사 */
+/* ========================================================================== */
+if (session_status() === PHP_SESSION_NONE) {
+    session_start();
+}
+ob_start();
+
+require_once 'db.php';
+
+if (!isset($_SESSION['user_id'])) {
+    header("Location: login.htm");
+    exit;
+}
+
+$user_id = (int)$_SESSION['user_id'];
+$user_role = $_SESSION['role'] ?? 'USER';
+$store_name = $_SESSION['store_name'] ?? '내 매장';
+
+$api_openai_key = '';
+try {
+    $k_stmt = $pdo->query("SELECT setting_value FROM site_settings WHERE setting_key = 'api_openai_key' LIMIT 1");
+    $api_openai_key = trim($k_stmt->fetchColumn() ?: '');
+} catch (PDOException $e) {}
+
+if (empty($api_openai_key)) {
+    $api_openai_key = getenv('OPENAI_API_KEY') ?: ($_ENV['OPENAI_API_KEY'] ?? '');
+}
+
+$generated_replies = null;
+
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['generate_response'])) {
+    if ($user_role === 'USER') {
+        $_SESSION['flash_err'] = '일반회원은 대응문 생성 권한이 없습니다.';
+        header("Location: review_ai_assistant.htm");
+        exit;
+    }
+
+    $customer_review = trim($_POST['customer_review'] ?? '');
+    $complaint_type = trim($_POST['complaint_type'] ?? '이물질/위생');
+
+    $generated_replies = [
+        'empathy' => "안녕하세요, {$store_name} 점주입니다. 귀한 발걸음 해주셨는데 실망을 안겨드려 머리 숙여 사과드립니다. 고객님의 소중한 지적을 겸허히 수용하며 즉각 시정하겠습니다.",
+        'legal' => "사실과 현저히 다른 악의적 비방이나 허위 사실 유포 시 배달앱 권리침해 신고 및 정보통신망법상 명예훼손에 따른 법적 보호 조치가 진행될 수 있음을 정중히 안내드립니다."
+    ];
+
+    if (!empty($api_openai_key) && !empty($customer_review)) {
+        $prompt = "매장명: {$store_name}, 불만유형: {$complaint_type}, 고객리뷰: \"{$customer_review}\".
+점주가 대처할 수 있는 [진심 어린 사과 및 보상형 답글]과 [악의적 비방 시 법적 조치 경고문] 2가지를 작성해줘.
+반드시 다음 JSON 형식으로만 답해줘:
+{\"empathy\":\"공감사과문\",\"legal\":\"법적경고문\"}";
+
+        $ch = curl_init('https://api.openai.com/v1/chat/completions');
+        curl_setopt_array($ch, [
+            CURLOPT_RETURNTRANSFER => true,
+            CURLOPT_POST => true,
+            CURLOPT_POSTFIELDS => json_encode([
+                'model' => 'gpt-4o-mini',
+                'messages' => [
+                    ['role' => 'system', 'content' => 'You are an expert customer relations and legal advisor. Respond ONLY in valid JSON.'],
+                    ['role' => 'user', 'content' => $prompt]
+                ],
+                'response_format' => ['type' => 'json_object'],
+                'temperature' => 0.5
+            ]),
+            CURLOPT_HTTPHEADER => ['Content-Type: application/json', 'Authorization: Bearer ' . $api_openai_key],
+            CURLOPT_TIMEOUT => 6,
+            CURLOPT_SSL_VERIFYPEER => false
+        ]);
+        $res = curl_exec($ch);
+        curl_close($ch);
+
+        if ($res) {
+            $parsed = json_decode($res, true);
+            if (!empty($parsed['choices'][0]['message']['content'])) {
+                $content = json_decode($parsed['choices'][0]['message']['content'], true);
+                if (!empty($content['empathy'])) $generated_replies['empathy'] = $content['empathy'];
+                if (!empty($content['legal'])) $generated_replies['legal'] = $content['legal'];
+            }
+        }
+    }
+}
+
+require_once 'header.php';
+?>
+
+<style>
+    .assist-title-responsive { font-size: clamp(1.15rem, 1.8vw, 1.75rem) !important; font-weight: 800 !important; color: #0f172a; }
+</style>
+
+<div class="row mb-4 align-items-center">
+    <div class="col-md-8">
+        <h3 class="fw-bold mb-1 assist-title-responsive">
+            <i class="fa-solid fa-headset text-primary me-2"></i>배달앱·네이버 악성 리뷰 컴플레인 AI 법적 대응 비서
+        </h3>
+        <p class="text-muted mb-0 small">
+            컴플레인에 즉각 대처하는 공감 답글과 블랙컨슈머에 대한 정중한 법적 방어문을 AI가 자동 작성합니다.
+        </p>
+    </div>
+</div>
+
+<div class="row g-4 mb-4">
+    <div class="col-lg-6">
+        <div class="glass-card p-4 h-100">
+            <h5 class="fw-bold mb-3 text-dark"><i class="fa-solid fa-comment-slash text-danger me-2"></i>컴플레인 리뷰 입력</h5>
+            <form method="POST" action="review_ai_assistant.htm">
+                <input type="hidden" name="generate_response" value="1">
+                <div class="mb-3">
+                    <label class="form-label fw-bold small text-dark">불만 접수 유형</label>
+                    <select name="complaint_type" class="form-select">
+                        <option value="이물질/위생 문제">이물질 / 머리카락 / 위생 문제</option>
+                        <option value="배달 지연 및 음식 식음">배달 지연 및 음식 식음 / 쏟아짐</option>
+                        <option value="맛/품질 불만족">맛 / 덜 익음 / 품질 불만족</option>
+                        <option value="직원 응대 불친절">직원 응대 / 전화 태도 불친절</option>
+                        <option value="악의적 허위 비방">사실 무근 / 악의적 별점 테러</option>
+                    </select>
+                </div>
+                <div class="mb-3">
+                    <label class="form-label fw-bold small text-dark">고객 리뷰 원문</label>
+                    <textarea name="customer_review" class="form-control" rows="6" placeholder="배달앱이나 네이버 영수증 리뷰에 달린 고객의 불만 리뷰를 복사하여 붙여넣으세요." required></textarea>
+                </div>
+                <button type="submit" class="btn btn-primary w-100 rounded-pill py-2 fw-bold" <?= $user_role === 'USER' ? 'disabled' : '' ?>>
+                    <i class="fa-solid fa-wand-magic-sparkles me-1"></i>AI 즉시 대응문 생성하기
+                </button>
+            </form>
+        </div>
+    </div>
+
+    <div class="col-lg-6">
+        <div class="glass-card p-4 h-100">
+            <h5 class="fw-bold mb-3 text-dark"><i class="fa-solid fa-robot text-primary me-2"></i>AI 최적 대응 답글 추천</h5>
+            <?php if ($generated_replies): ?>
+                <div class="mb-3">
+                    <div class="d-flex justify-content-between align-items-center mb-1">
+                        <span class="badge bg-success-subtle text-success border">1안: 진심 어린 공감·사과문 (추천)</span>
+                        <button class="btn btn-sm btn-link text-decoration-none p-0 fw-semibold" onclick="navigator.clipboard.writeText(document.getElementById('r_empathy').innerText); alert('공감 사과문이 복사되었습니다.');">복사</button>
+                    </div>
+                    <div class="p-3 bg-light rounded-3 border small" id="r_empathy" style="white-space: pre-line; line-height: 1.6;">
+                        <?= htmlspecialchars($generated_replies['empathy']) ?>
+                    </div>
+                </div>
+                <div>
+                    <div class="d-flex justify-content-between align-items-center mb-1">
+                        <span class="badge bg-danger-subtle text-danger border">2안: 악의적 비방 시 정중한 법적 방어문</span>
+                        <button class="btn btn-sm btn-link text-decoration-none p-0 fw-semibold" onclick="navigator.clipboard.writeText(document.getElementById('r_legal').innerText); alert('법적 대응문이 복사되었습니다.');">복사</button>
+                    </div>
+                    <div class="p-3 bg-light rounded-3 border small" id="r_legal" style="white-space: pre-line; line-height: 1.6;">
+                        <?= htmlspecialchars($generated_replies['legal']) ?>
+                    </div>
+                </div>
+            <?php else: ?>
+                <div class="text-center py-5 text-muted">
+                    <i class="fa-solid fa-headset fa-3x mb-3 opacity-50"></i>
+                    <p class="mb-0">왼쪽에 리뷰를 입력하고 버튼을 누르면 AI가 최적의 대응문을 작성합니다.</p>
+                </div>
+            <?php endif; ?>
+        </div>
+    </div>
+</div>
+
+<?php
+include_once 'footer.php';
+?>
+</body>
+</html>

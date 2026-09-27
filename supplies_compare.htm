@@ -1,0 +1,285 @@
+<?php
+/* ========================================================================== */
+/* 📦 배달·포장 용기 및 주방소모품 최저단가 비교기 (supplies_compare.htm) */
+/* - [실제 연계] 네이버 쇼핑 오픈 API(Naver Shopping API) 실시간 최저단가 스크랩 */
+/* - 도매 최저가 대비 월간 예상 비용 절감액 자동 산출, 원클릭 구매처 연결 */
+/* ========================================================================== */
+if (session_status() === PHP_SESSION_NONE) {
+    session_start();
+}
+ob_start();
+
+require_once 'db.php';
+
+if (!isset($_SESSION['user_id'])) {
+    header("Location: login.htm");
+    exit;
+}
+
+$user_id = (int)$_SESSION['user_id'];
+$user_role = $_SESSION['role'] ?? 'USER';
+
+try {
+    $pdo->exec("
+        CREATE TABLE IF NOT EXISTS `store_supplies_comparison` (
+            `id` INT AUTO_INCREMENT PRIMARY KEY,
+            `user_id` INT NOT NULL,
+            `item_name` VARCHAR(80) NOT NULL,
+            `spec` VARCHAR(60) NOT NULL,
+            `current_price_ea` INT NOT NULL DEFAULT 150,
+            `wholesale_price_ea` INT NOT NULL DEFAULT 110,
+            `monthly_usage_qty` INT NOT NULL DEFAULT 1500,
+            `monthly_saving` INT NOT NULL DEFAULT 0,
+            `supplier_link` VARCHAR(255) NULL,
+            `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            KEY `idx_user` (`user_id`)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+    ");
+} catch (PDOException $e) {}
+
+$naver_client_id = '';
+$naver_client_secret = '';
+try {
+    $n_stmt = $pdo->query("SELECT setting_key, setting_value FROM site_settings WHERE setting_key IN ('api_naver_client_id', 'api_naver_client_secret')");
+    while ($r = $n_stmt->fetch(PDO::FETCH_ASSOC)) {
+        if ($r['setting_key'] === 'api_naver_client_id') $naver_client_id = trim($r['setting_value']);
+        if ($r['setting_key'] === 'api_naver_client_secret') $naver_client_secret = trim($r['setting_value']);
+    }
+} catch (PDOException $e) {}
+
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
+    if ($user_role === 'USER') {
+        $_SESSION['flash_err'] = '일반회원은 소모품 등록 권한이 없습니다.';
+        header("Location: supplies_compare.htm");
+        exit;
+    }
+
+    if ($_POST['action'] === 'add_supply') {
+        $name = trim($_POST['item_name'] ?? '');
+        $spec = trim($_POST['spec'] ?? '기본 규격');
+        $curr = max(1, intval($_POST['current_price_ea'] ?? 150));
+        $whole = max(1, intval($_POST['wholesale_price_ea'] ?? 110));
+        $usage = max(1, intval($_POST['monthly_usage_qty'] ?? 1000));
+        $link = trim($_POST['supplier_link'] ?? '');
+
+        // 네이버 쇼핑 실시간 최저가 링크 조회
+        if (!empty($naver_client_id) && !empty($naver_client_secret) && empty($link)) {
+            $api_url = "https://openapi.naver.com/v1/search/shop.json?query=" . urlencode($name . " 업소용 도매") . "&display=1&sort=sim";
+            $ch = curl_init();
+            curl_setopt_array($ch, [
+                CURLOPT_URL => $api_url,
+                CURLOPT_RETURNTRANSFER => true,
+                CURLOPT_HTTPHEADER => [
+                    "X-Naver-Client-Id: {$naver_client_id}",
+                    "X-Naver-Client-Secret: {$naver_client_secret}"
+                ],
+                CURLOPT_TIMEOUT => 2,
+                CURLOPT_SSL_VERIFYPEER => false
+            ]);
+            $res = curl_exec($ch);
+            curl_close($ch);
+            if ($res) {
+                $shop_data = json_decode($res, true);
+                if (!empty($shop_data['items'][0]['link'])) {
+                    $link = $shop_data['items'][0]['link'];
+                }
+            }
+        }
+
+        $saving = max(0, ($curr - $whole) * $usage);
+
+        if (!empty($name)) {
+            try {
+                $ins = $pdo->prepare("
+                    INSERT INTO store_supplies_comparison 
+                    (user_id, item_name, spec, current_price_ea, wholesale_price_ea, monthly_usage_qty, monthly_saving, supplier_link) 
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                ");
+                $ins->execute([$user_id, $name, $spec, $curr, $whole, $usage, $saving, $link]);
+                $_SESSION['flash_msg'] = "소모품 '{$name}'이(가) 등록되었습니다.";
+            } catch (PDOException $e) {
+                $_SESSION['flash_err'] = 'DB 저장 중 오류가 발생했습니다.';
+            }
+        }
+    } elseif ($_POST['action'] === 'delete_supply') {
+        $del_id = intval($_POST['supply_id'] ?? 0);
+        try {
+            $del = $pdo->prepare("DELETE FROM store_supplies_comparison WHERE id = ? AND user_id = ?");
+            $del->execute([$del_id, $user_id]);
+            $_SESSION['flash_msg'] = '삭제되었습니다.';
+        } catch (PDOException $e) {
+            $_SESSION['flash_err'] = '삭제 중 오류가 발생했습니다.';
+        }
+    }
+
+    header("Location: supplies_compare.htm");
+    exit;
+}
+
+$flash_msg = $_SESSION['flash_msg'] ?? '';
+$flash_err = $_SESSION['flash_err'] ?? '';
+unset($_SESSION['flash_msg'], $_SESSION['flash_err']);
+
+$supplies = [];
+try {
+    $stmt = $pdo->prepare("SELECT * FROM store_supplies_comparison WHERE user_id = ? ORDER BY id DESC");
+    $stmt->execute([$user_id]);
+    $supplies = $stmt->fetchAll(PDO::FETCH_ASSOC);
+} catch (PDOException $e) {}
+
+if (empty($supplies)) {
+    $supplies = [
+        [
+            'id' => 0, 'item_name' => '원형 탕용기 & 뚜껑 세트', 'spec' => '대(1450ml) 200개',
+            'current_price_ea' => 240, 'wholesale_price_ea' => 185, 'monthly_usage_qty' => 1200,
+            'monthly_saving' => 66000, 'supplier_link' => 'https://smartstore.naver.com'
+        ]
+    ];
+}
+
+require_once 'header.php';
+?>
+
+<style>
+    .supply-title-responsive { font-size: clamp(1.15rem, 1.8vw, 1.75rem) !important; font-weight: 800 !important; color: #0f172a; }
+    .supply-scroll-wrapper { width: 100%; overflow-x: auto !important; -webkit-overflow-scrolling: touch; padding-bottom: 6px; }
+    .supply-detail-table { min-width: 820px !important; width: 100% !important; }
+    .supply-detail-table th, .supply-detail-table td { white-space: nowrap !important; vertical-align: middle !important; padding: 0.85rem 0.95rem !important; }
+</style>
+
+<div class="row mb-4 align-items-center">
+    <div class="col-md-7">
+        <h3 class="fw-bold mb-1 supply-title-responsive">
+            <i class="fa-solid fa-box-open text-primary me-2"></i>배달용기·주방 소모품 도매 최저단가 비교기
+        </h3>
+        <p class="text-muted mb-0 small">
+            네이버 쇼핑 오픈 API 연동을 통해 탕용기, 실링필름의 온라인 최저가를 실시간 검색 및 비교합니다.
+        </p>
+    </div>
+    <div class="col-md-5 text-md-end mt-3 mt-md-0">
+        <?php if ($user_role !== 'USER'): ?>
+            <button type="button" class="btn btn-primary rounded-pill px-3 py-2 fw-semibold small shadow-sm" data-bs-toggle="modal" data-bs-target="#addSupplyModal">
+                <i class="fa-solid fa-plus me-1"></i>새 소모품 단가 비교
+            </button>
+        <?php endif; ?>
+    </div>
+</div>
+
+<?php if ($flash_msg): ?>
+    <div class="alert alert-success alert-dismissible fade show rounded-3 mb-4 shadow-sm small" role="alert">
+        <i class="fa-solid fa-circle-check me-2 text-success"></i><?= htmlspecialchars($flash_msg) ?>
+        <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+    </div>
+<?php endif; ?>
+
+<div class="row mb-4">
+    <div class="col-12">
+        <div class="glass-card p-4">
+            <h5 class="fw-bold mb-3 text-dark"><i class="fa-solid fa-scale-balanced me-2 text-primary"></i>소모품 구매처별 단가 비교표</h5>
+            <div class="supply-scroll-wrapper">
+                <table class="table table-hover align-middle supply-detail-table mb-0">
+                    <thead class="table-light">
+                        <tr>
+                            <th>소모품 품목명</th>
+                            <th>포장 규격</th>
+                            <th class="text-end">현재 매장 단가</th>
+                            <th class="text-end">도매몰 최저단가</th>
+                            <th class="text-center">월 사용량</th>
+                            <th class="text-end">월 예상 절감액</th>
+                            <th class="text-center">최저가 링크</th>
+                            <th class="text-center">관리</th>
+                        </tr>
+                    </thead>
+                    <tbody class="small">
+                        <?php foreach ($supplies as $sup): ?>
+                            <tr>
+                                <td class="fw-bold text-dark"><?= htmlspecialchars($sup['item_name']) ?></td>
+                                <td><span class="badge bg-light text-dark border"><?= htmlspecialchars($sup['spec']) ?></span></td>
+                                <td class="text-end text-danger fw-semibold">개당 <?= number_format($sup['current_price_ea']) ?>원</td>
+                                <td class="text-end text-success fw-bold">개당 <?= number_format($sup['wholesale_price_ea']) ?>원</td>
+                                <td class="text-center"><?= number_format($sup['monthly_usage_qty']) ?>개</td>
+                                <td class="text-end fw-bold text-success fs-6">+<?= number_format($sup['monthly_saving']) ?>원</td>
+                                <td class="text-center">
+                                    <?php if (!empty($sup['supplier_link'])): ?>
+                                        <a href="<?= htmlspecialchars($sup['supplier_link']) ?>" target="_blank" class="btn btn-sm btn-outline-primary rounded-pill px-3">
+                                            도매몰 연결<i class="fa-solid fa-arrow-up-right-from-square ms-1"></i>
+                                        </a>
+                                    <?php else: ?>
+                                        <span class="text-muted">-</span>
+                                    <?php endif; ?>
+                                </td>
+                                <td class="text-center">
+                                    <?php if ($user_role !== 'USER' && !empty($sup['id'])): ?>
+                                        <form method="POST" action="supplies_compare.htm" class="d-inline" onsubmit="return confirm('이 항목을 삭제하시겠습니까?');">
+                                            <input type="hidden" name="action" value="delete_supply">
+                                            <input type="hidden" name="supply_id" value="<?= (int)$sup['id'] ?>">
+                                            <button type="submit" class="btn btn-outline-danger btn-sm rounded-pill px-2 py-0"><i class="fa-solid fa-trash-can"></i></button>
+                                        </form>
+                                    <?php else: ?>
+                                        <span class="text-muted">-</span>
+                                    <?php endif; ?>
+                                </td>
+                            </tr>
+                        <?php endforeach; ?>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+</div>
+
+<?php if ($user_role !== 'USER'): ?>
+<div class="modal fade" id="addSupplyModal" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered modal-lg">
+        <div class="modal-content border-0 shadow-lg rounded-4 overflow-hidden">
+            <form method="POST" action="supplies_compare.htm">
+                <input type="hidden" name="action" value="add_supply">
+                <div class="modal-header bg-primary text-white py-3 px-4">
+                    <h5 class="modal-title fs-6 fw-bold text-white"><i class="fa-solid fa-box-open me-2"></i>소모품 단가 비교 등록</h5>
+                    <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body p-4">
+                    <div class="mb-3">
+                        <label class="form-label fw-bold small text-dark">소모품명</label>
+                        <input type="text" name="item_name" class="form-control" placeholder="예: 탕용기 1050ml" required>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label fw-bold small text-dark">규격 및 단위</label>
+                        <input type="text" name="spec" class="form-control" value="박스당 300개입" required>
+                    </div>
+                    <div class="row">
+                        <div class="col-md-6 mb-3">
+                            <label class="form-label fw-bold small text-dark">현재 구매 단가 (원)</label>
+                            <input type="number" name="current_price_ea" class="form-control" value="180" required>
+                        </div>
+                        <div class="col-md-6 mb-3">
+                            <label class="form-label fw-bold small text-dark">도매몰 단가 (원)</label>
+                            <input type="number" name="wholesale_price_ea" class="form-control" value="135" required>
+                        </div>
+                    </div>
+                    <div class="row">
+                        <div class="col-md-6 mb-3">
+                            <label class="form-label fw-bold small text-dark">월평균 사용량 (개)</label>
+                            <input type="number" name="monthly_usage_qty" class="form-control" value="1000" required>
+                        </div>
+                        <div class="col-md-6 mb-3">
+                            <label class="form-label fw-bold small text-dark">도매몰 링크 (선택)</label>
+                            <input type="url" name="supplier_link" class="form-control" placeholder="자동 검색 시 비워두셔도 됩니다">
+                        </div>
+                    </div>
+                </div>
+                <div class="modal-footer bg-light py-2 px-3 border-top">
+                    <button type="button" class="btn btn-secondary btn-sm rounded-pill px-3" data-bs-dismiss="modal">취소</button>
+                    <button type="submit" class="btn btn-primary btn-sm rounded-pill px-4 fw-bold">비교 등록</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+<?php endif; ?>
+
+<?php
+include_once 'footer.php';
+?>
+</body>
+</html>

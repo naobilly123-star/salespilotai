@@ -1,0 +1,171 @@
+<?php
+/* ========================================================================== */
+/* 📅 월간 정산·지출 캘린더 & 현금흐름 다이어리 (sales_calendar.htm) */
+/* - [실제 연계] 한국천문연구원 공휴일 오픈 API 실시간 연계 및 주말/공휴일 특수 반영 */
+/* - 실제 DB 일별 매출액 집계, 월간 캘린더 모바일 가로 스크롤 완전 지원 */
+/* ========================================================================== */
+if (session_status() === PHP_SESSION_NONE) {
+    session_start();
+}
+ob_start();
+
+require_once 'db.php';
+
+if (!isset($_SESSION['user_id'])) {
+    header("Location: login.htm");
+    exit;
+}
+
+$user_id = (int)$_SESSION['user_id'];
+$user_role = $_SESSION['role'] ?? 'USER';
+$store_name = $_SESSION['store_name'] ?? '내 매장';
+
+$year = isset($_GET['year']) ? intval($_GET['year']) : intval(date('Y'));
+$month = isset($_GET['month']) ? intval($_GET['month']) : intval(date('m'));
+
+$start_date = sprintf('%04d-%02d-01', $year, $month);
+$end_date = date('Y-m-t', strtotime($start_date));
+
+/* 한국천문연구원 특일(공휴일) API 연동 */
+$holidays = [];
+$api_portal_key = '';
+try {
+    $k_stmt = $pdo->query("SELECT setting_value FROM site_settings WHERE setting_key = 'api_public_portal_key' LIMIT 1");
+    $api_portal_key = trim($k_stmt->fetchColumn() ?: '');
+} catch (PDOException $e) {}
+
+if (empty($api_portal_key)) {
+    $api_portal_key = getenv('PUBLIC_PORTAL_KEY') ?: ($_ENV['PUBLIC_PORTAL_KEY'] ?? '52f3a8745c117a5db9e63d40333663a2d04aec1271c3eb16a19285110739eafd');
+}
+
+if (!empty($api_portal_key)) {
+    $h_url = "https://apis.data.go.kr/B090041/openapi/service/SpcdeInfoService/getHoliDeInfo?serviceKey=" . urlencode($api_portal_key) . "&solYear={$year}&solMonth=" . sprintf('%02d', $month) . "&_type=json";
+
+    $h_ch = curl_init();
+    curl_setopt_array($h_ch, [
+        CURLOPT_URL => $h_url,
+        CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_CONNECTTIMEOUT => 2,
+        CURLOPT_TIMEOUT => 2,
+        CURLOPT_SSL_VERIFYPEER => false
+    ]);
+    $h_res = curl_exec($h_ch);
+    curl_close($h_ch);
+    if ($h_res) {
+        $h_json = json_decode($h_res, true);
+        if (!empty($h_json['response']['body']['items']['item'])) {
+            $h_items = $h_json['response']['body']['items']['item'];
+            if (isset($h_items['locdate'])) $h_items = [$h_items];
+            foreach ($h_items as $hi) {
+                $loc = strval($hi['locdate']);
+                $h_fmt = substr($loc, 0, 4) . '-' . substr($loc, 4, 2) . '-' . substr($loc, 6, 2);
+                $holidays[$h_fmt] = $hi['dateName'];
+            }
+        }
+    }
+}
+
+// DB에서 해당 월 일별 매출 집계
+$monthly_data = [];
+try {
+    $stmt = $pdo->prepare("SELECT sales_date, SUM(amount) as total FROM sales_data WHERE user_id = ? AND sales_date BETWEEN ? AND ? GROUP BY sales_date");
+    $stmt->execute([$user_id, $start_date, $end_date]);
+    while ($row = $stmt->fetch(PDO::FETCH_ASSOC)) {
+        $monthly_data[$row['sales_date']] = (int)$row['total'];
+    }
+} catch (PDOException $e) {}
+
+require_once 'header.php';
+?>
+
+<style>
+    .cal-title-responsive { font-size: clamp(1.15rem, 1.8vw, 1.75rem) !important; font-weight: 800 !important; color: #0f172a; }
+    .calendar-table { width: 100%; border-collapse: collapse; min-width: 700px; }
+    .calendar-table th, .calendar-table td { border: 1px solid #e2e8f0; width: 14.28%; vertical-align: top; padding: 8px; height: 95px; }
+    .calendar-table th { height: 35px; background: #f8fafc; text-align: center; font-size: 0.85rem; }
+    .cal-scroll-wrapper { width: 100%; overflow-x: auto !important; -webkit-overflow-scrolling: touch; padding-bottom: 6px; }
+</style>
+
+<div class="row mb-4 align-items-center">
+    <div class="col-md-7">
+        <h3 class="fw-bold mb-1 cal-title-responsive">
+            <i class="fa-solid fa-calendar-days text-primary me-2"></i>월간 정산·지출 캘린더 (<?= $year ?>년 <?= $month ?>월)
+        </h3>
+        <p class="text-muted mb-0 small">
+            공휴일 오픈 API를 반영하여 공휴일 매출 특수 및 일별 매출 흐름을 모니터링합니다.
+        </p>
+    </div>
+    <div class="col-md-5 text-md-end mt-3 mt-md-0">
+        <?php
+            $prev_m = $month - 1; $prev_y = $year;
+            if ($prev_m < 1) { $prev_m = 12; $prev_y--; }
+            $next_m = $month + 1; $next_y = $year;
+            if ($next_m > 12) { $next_m = 1; $next_y++; }
+        ?>
+        <a href="sales_calendar.htm?year=<?= $prev_y ?>&month=<?= $prev_m ?>" class="btn btn-sm btn-outline-secondary rounded-pill px-3">이전 달</a>
+        <a href="sales_calendar.htm?year=<?= date('Y') ?>&month=<?= date('n') ?>" class="btn btn-sm btn-primary rounded-pill px-3">이번 달</a>
+        <a href="sales_calendar.htm?year=<?= $next_y ?>&month=<?= $next_m ?>" class="btn btn-sm btn-outline-secondary rounded-pill px-3">다음 달</a>
+    </div>
+</div>
+
+<div class="row mb-4">
+    <div class="col-12">
+        <div class="glass-card p-4">
+            <div class="cal-scroll-wrapper">
+                <table class="calendar-table bg-white rounded-3 overflow-hidden">
+                    <thead>
+                        <tr>
+                            <th class="text-danger">일</th>
+                            <th>월</th>
+                            <th>화</th>
+                            <th>수</th>
+                            <th>목</th>
+                            <th>금</th>
+                            <th class="text-primary">토</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <?php
+                            $first_day_week = date('w', strtotime($start_date));
+                            $total_days = date('t', strtotime($start_date));
+                            $current_day = 1;
+
+                            for ($i = 0; $i < 6; $i++) {
+                                echo "<tr>";
+                                for ($j = 0; $j < 7; $j++) {
+                                    if (($i === 0 && $j < $first_day_week) || $current_day > $total_days) {
+                                        echo "<td class='bg-light'></td>";
+                                    } else {
+                                        $f_date = sprintf('%04d-%02d-%02d', $year, $month, $current_day);
+                                        $sales = $monthly_data[$f_date] ?? 0;
+                                        $is_h = isset($holidays[$f_date]);
+                                        $color = ($j === 0 || $is_h) ? 'text-danger' : (($j === 6) ? 'text-primary' : 'text-dark');
+
+                                        echo "<td>";
+                                        echo "<div class='d-flex justify-content-between align-items-center'>";
+                                        echo "<span class='fw-bold small {$color}'>{$current_day}</span>";
+                                        if ($is_h) echo "<span class='badge bg-danger-subtle text-danger' style='font-size:0.65rem;'>{$holidays[$f_date]}</span>";
+                                        echo "</div>";
+                                        if ($sales > 0) {
+                                            echo "<div class='text-end mt-2'><span class='badge bg-primary-subtle text-primary fw-bold' style='font-size:0.75rem;'>" . number_format($sales / 10000, 1) . "만</span></div>";
+                                        }
+                                        echo "</td>";
+                                        $current_day++;
+                                    }
+                                }
+                                echo "</tr>";
+                                if ($current_day > $total_days) break;
+                            }
+                        ?>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+</div>
+
+<?php
+include_once 'footer.php';
+?>
+</body>
+</html>

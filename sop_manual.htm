@@ -1,0 +1,291 @@
+<?php
+/* ========================================================================== */
+/* 📋 소상공인 알바 업무 인수인계 매뉴얼 & 오픈/마감 SOP 생성기 (sop_manual.htm) */
+/* - 파트별(오픈, 미들, 마감, 홀, 주방) 업무 체크리스트 및 A4 인쇄 규격 서식 대응 */
+/* - 무충돌 아키텍처: 세션 버퍼링, DDL 무중단 마이그레이션, 터치 가로 스크롤 */
+/* ========================================================================== */
+if (session_status() === PHP_SESSION_NONE) {
+    session_start();
+}
+ob_start();
+
+require_once 'db.php';
+
+if (!isset($_SESSION['user_id'])) {
+    header("Location: login.htm");
+    exit;
+}
+
+$user_id = (int)$_SESSION['user_id'];
+$user_role = $_SESSION['role'] ?? 'USER';
+$store_name = $_SESSION['store_name'] ?? '내 매장';
+
+try {
+    $pdo->exec("
+        CREATE TABLE IF NOT EXISTS `store_sop_manuals` (
+            `id` INT AUTO_INCREMENT PRIMARY KEY,
+            `user_id` INT NOT NULL,
+            `duty_type` ENUM('OPEN', 'MIDDLE', 'CLOSE', 'HALL', 'KITCHEN') DEFAULT 'OPEN' COMMENT '직무/시간대 구분',
+            `manual_title` VARCHAR(100) NOT NULL COMMENT '매뉴얼 제목',
+            `checklist_content` TEXT NOT NULL COMMENT '업무 체크리스트 내용',
+            `emergency_action` VARCHAR(255) NULL COMMENT '비상상황 대처 요령',
+            `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            KEY `idx_user_duty` (`user_id`, `duty_type`)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+    ");
+} catch (PDOException $e) {}
+
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
+    if ($user_role === 'USER') {
+        $_SESSION['flash_err'] = '일반회원(읽기 전용)은 매뉴얼 등록 권한이 없습니다.';
+        header("Location: sop_manual.htm");
+        exit;
+    }
+
+    if ($_POST['action'] === 'save_manual') {
+        $type = in_array($_POST['duty_type'] ?? '', ['OPEN', 'MIDDLE', 'CLOSE', 'HALL', 'KITCHEN']) ? $_POST['duty_type'] : 'OPEN';
+        $title = trim($_POST['manual_title'] ?? '');
+        $content = trim($_POST['checklist_content'] ?? '');
+        $emergency = trim($_POST['emergency_action'] ?? '');
+
+        if (!empty($title) && !empty($content)) {
+            try {
+                $ins = $pdo->prepare("
+                    INSERT INTO store_sop_manuals 
+                    (user_id, duty_type, manual_title, checklist_content, emergency_action) 
+                    VALUES (?, ?, ?, ?, ?)
+                ");
+                $ins->execute([$user_id, $type, $title, $content, $emergency]);
+                $_SESSION['flash_msg'] = "업무 매뉴얼 '{$title}'이(가) 등록되었습니다.";
+            } catch (PDOException $e) {
+                $_SESSION['flash_err'] = '매뉴얼 등록 중 오류가 발생했습니다.';
+            }
+        }
+    } elseif ($_POST['action'] === 'delete_manual') {
+        $del_id = intval($_POST['manual_id'] ?? 0);
+        try {
+            $del = $pdo->prepare("DELETE FROM store_sop_manuals WHERE id = ? AND user_id = ?");
+            $del->execute([$del_id, $user_id]);
+            $_SESSION['flash_msg'] = '선택하신 업무 매뉴얼이 삭제되었습니다.';
+        } catch (PDOException $e) {
+            $_SESSION['flash_err'] = '삭제 처리 중 오류가 발생했습니다.';
+        }
+    }
+
+    header("Location: sop_manual.htm");
+    exit;
+}
+
+$flash_msg = $_SESSION['flash_msg'] ?? '';
+$flash_err = $_SESSION['flash_err'] ?? '';
+unset($_SESSION['flash_msg'], $_SESSION['flash_err']);
+
+$manuals = [];
+try {
+    $stmt = $pdo->prepare("SELECT * FROM store_sop_manuals WHERE user_id = ? ORDER BY id DESC");
+    $stmt->execute([$user_id]);
+    $manuals = $stmt->fetchAll(PDO::FETCH_ASSOC);
+} catch (PDOException $e) {}
+
+if (empty($manuals)) {
+    $manuals = [
+        [
+            'id' => 0, 'duty_type' => 'OPEN', 'manual_title' => '오픈 출근 1시간 필수 점검 SOP',
+            'checklist_content' => "1. 조명 및 에어컨/환풍기 메인 전원 ON\n2. POS기 및 배달앱 주문 태블릿 3사 로그인 및 통신 확인\n3. 냉장/냉동고 온도계 확인(냉장 0~10도, 냉동 -18도 이하)\n4. 당일 판매할 식재료 1차 세척 및 소스통 전진 배치",
+            'emergency_action' => '인터넷 단선 시 공유기 재부팅 후 스마트폰 핫스팟 임시 테더링'
+        ],
+        [
+            'id' => 0, 'duty_type' => 'CLOSE', 'manual_title' => '마감 퇴근 전 누전/가스/보안 점검',
+            'checklist_content' => "1. 주방 메인 가스 밸브 2중 잠금 및 누설 여부 점검\n2. 튀김기 전원 차단 및 덮개 밀봉, 온수기 전원 OFF\n3. 당일 판매 잔여 식재료 소분 라벨링(폐기일자 표기)\n4. POS기 일일 마감 정산서 출력 및 쓰레기장 배출 후 출입문 락",
+            'emergency_action' => '가스 냄새 감지 시 환풍기 켜지 말고 즉시 창문 개방 후 비상연락망 보고'
+        ]
+    ];
+}
+
+require_once 'header.php';
+?>
+
+<style>
+    .sop-title-responsive { font-size: clamp(1.15rem, 1.8vw, 1.75rem) !important; font-weight: 800 !important; color: #0f172a; }
+    .sop-scroll-wrapper { width: 100%; overflow-x: auto !important; -webkit-overflow-scrolling: touch; padding-bottom: 6px; }
+    .sop-detail-table { min-width: 860px !important; width: 100% !important; }
+    .sop-detail-table th, .sop-detail-table td { white-space: nowrap !important; vertical-align: middle !important; padding: 0.85rem 0.95rem !important; }
+    .sop-paper-box { background: #ffffff; border: 2px solid #334155; border-radius: 12px; padding: 2.2rem; max-width: 700px; margin: 0 auto; font-family: 'Pretendard', sans-serif; }
+    @media print {
+        body { background: #ffffff !important; }
+        .navbar, .btn-print-hide, footer, .alert { display: none !important; }
+        .sop-paper-box { border: 2px solid #000000 !important; box-shadow: none !important; margin: 0 auto !important; }
+    }
+</style>
+
+<div class="row mb-4 align-items-center btn-print-hide">
+    <div class="col-md-7">
+        <h3 class="fw-bold mb-1 sop-title-responsive">
+            <i class="fa-solid fa-list-check text-primary me-2"></i>알바 인수인계 매뉴얼 & 오픈/마감 SOP 생성기
+        </h3>
+        <p class="text-muted mb-0 small">
+            직원 교체 시 발생하는 조리 실수와 가스/전기 마감 누락을 방지하기 위한 매장 표준 업무 체크리스트를 인쇄합니다.
+        </p>
+    </div>
+    <div class="col-md-5 text-md-end mt-3 mt-md-0">
+        <?php if ($user_role !== 'USER'): ?>
+            <button type="button" class="btn btn-primary rounded-pill px-3 py-2 fw-semibold small shadow-sm" data-bs-toggle="modal" data-bs-target="#addSopModal">
+                <i class="fa-solid fa-plus me-1"></i>새 SOP 매뉴얼 작성
+            </button>
+        <?php else: ?>
+            <span class="badge bg-light text-secondary border px-3 py-2 rounded-pill small">일반회원 (읽기 전용)</span>
+        <?php endif; ?>
+    </div>
+</div>
+
+<?php if ($flash_msg): ?>
+    <div class="alert alert-success alert-dismissible fade show rounded-3 mb-4 shadow-sm small btn-print-hide" role="alert">
+        <i class="fa-solid fa-circle-check me-2 text-success"></i><?= htmlspecialchars($flash_msg) ?>
+        <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+    </div>
+<?php endif; ?>
+
+<div class="row mb-4 btn-print-hide">
+    <div class="col-12">
+        <div class="glass-card p-4">
+            <h5 class="fw-bold mb-3 text-dark"><i class="fa-solid fa-clipboard-list me-2 text-primary"></i>등록된 파트별 SOP 매뉴얼 목록</h5>
+            <div class="sop-scroll-wrapper">
+                <table class="table table-hover align-middle sop-detail-table mb-0">
+                    <thead class="table-light">
+                        <tr>
+                            <th>구분</th>
+                            <th>매뉴얼 제목</th>
+                            <th>주요 업무 요약</th>
+                            <th>비상 대처 요령</th>
+                            <th class="text-center">부착용 출력</th>
+                            <th class="text-center">관리</th>
+                        </tr>
+                    </thead>
+                    <tbody class="small">
+                        <?php foreach ($manuals as $m): ?>
+                            <?php
+                                $d_text = ($m['duty_type'] === 'OPEN') ? '오픈 준비' : (($m['duty_type'] === 'CLOSE') ? '마감 정돈' : (($m['duty_type'] === 'HALL') ? '홀 서빙' : '주방 조리'));
+                                $badge_bg = ($m['duty_type'] === 'OPEN') ? 'info text-dark' : (($m['duty_type'] === 'CLOSE') ? 'danger' : 'primary');
+                            ?>
+                            <tr>
+                                <td><span class="badge bg-<?= $badge_bg ?>"><?= $d_text ?></span></td>
+                                <td class="fw-bold text-dark"><?= htmlspecialchars($m['manual_title']) ?></td>
+                                <td class="text-secondary text-truncate" style="max-width: 250px;">
+                                    <?= htmlspecialchars(str_replace("\n", " / ", $m['checklist_content'])) ?>
+                                </td>
+                                <td class="text-danger fw-semibold text-truncate" style="max-width: 200px;">
+                                    <?= htmlspecialchars($m['emergency_action'] ?? '-') ?>
+                                </td>
+                                <td class="text-center">
+                                    <button type="button" class="btn btn-sm btn-outline-dark rounded-pill px-3" onclick="previewSop('<?= htmlspecialchars(addslashes($m['manual_title'])) ?>', '<?= $d_text ?>', `<?= htmlspecialchars(addslashes($m['checklist_content'])) ?>`, '<?= htmlspecialchars(addslashes($m['emergency_action'])) ?>');">
+                                        <i class="fa-solid fa-print me-1"></i>서식 반영 & 인쇄
+                                    </button>
+                                </td>
+                                <td class="text-center">
+                                    <?php if ($user_role !== 'USER' && !empty($m['id'])): ?>
+                                        <form method="POST" action="sop_manual.htm" class="d-inline" onsubmit="return confirm('매뉴얼을 삭제하시겠습니까?');">
+                                            <input type="hidden" name="action" value="delete_manual">
+                                            <input type="hidden" name="manual_id" value="<?= (int)$m['id'] ?>">
+                                            <button type="submit" class="btn btn-outline-danger btn-sm rounded-pill px-2 py-0"><i class="fa-solid fa-trash-can"></i></button>
+                                        </form>
+                                    <?php else: ?>
+                                        <span class="text-muted">-</span>
+                                    <?php endif; ?>
+                                </td>
+                            </tr>
+                        <?php endforeach; ?>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="row">
+    <div class="col-12">
+        <div class="sop-paper-box" id="printSopSection">
+            <div class="d-flex justify-content-between align-items-center border-bottom border-3 border-dark pb-3 mb-3">
+                <div>
+                    <h3 class="fw-bold text-dark mb-1" id="ps_title"><?= htmlspecialchars($manuals[0]['manual_title']) ?></h3>
+                    <span class="badge bg-dark px-3 py-1" id="ps_type">오픈 준비 표준 절차</span>
+                </div>
+                <h5 class="fw-bold text-primary mb-0"><?= htmlspecialchars($store_name) ?></h5>
+            </div>
+            <div class="mb-4">
+                <h6 class="fw-bold text-dark border-bottom pb-1 mb-2"><i class="fa-solid fa-square-check me-1 text-success"></i>필수 업무 수행 체크리스트</h6>
+                <div class="lh-lg small text-dark p-3 bg-light rounded" id="ps_content" style="white-space: pre-line;">
+                    <?= htmlspecialchars($manuals[0]['checklist_content']) ?>
+                </div>
+            </div>
+            <div class="p-3 border border-danger-subtle bg-danger-subtle rounded mb-4">
+                <strong class="text-danger d-block mb-1"><i class="fa-solid fa-triangle-exclamation me-1"></i>돌발/비상상황 대처 요령</strong>
+                <p class="small text-danger mb-0" id="ps_emergency"><?= htmlspecialchars($manuals[0]['emergency_action'] ?? '-') ?></p>
+            </div>
+            <div class="text-center text-muted small pt-2 border-top">
+                본 매뉴얼을 준수하여 근무자 안전과 고객 만족에 최선을 다해 주시기 바랍니다. (게시일자: <?= date('Y-m-d') ?>)
+            </div>
+        </div>
+    </div>
+</div>
+
+<?php if ($user_role !== 'USER'): ?>
+<div class="modal fade btn-print-hide" id="addSopModal" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered modal-lg">
+        <div class="modal-content border-0 shadow-lg rounded-4 overflow-hidden">
+            <form method="POST" action="sop_manual.htm">
+                <input type="hidden" name="action" value="save_manual">
+                <div class="modal-header bg-primary text-white py-3 px-4">
+                    <h5 class="modal-title fs-6 fw-bold text-white"><i class="fa-solid fa-clipboard-list me-2"></i>표준 업무 매뉴얼 작성</h5>
+                    <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body p-4">
+                    <div class="row">
+                        <div class="col-md-8 mb-3">
+                            <label class="form-label fw-bold small text-dark">매뉴얼 제목</label>
+                            <input type="text" name="manual_title" class="form-control" placeholder="예: 평일 마감 청소 및 소등 SOP" required>
+                        </div>
+                        <div class="col-md-4 mb-3">
+                            <label class="form-label fw-bold small text-dark">구분</label>
+                            <select name="duty_type" class="form-select">
+                                <option value="OPEN">오픈 준비</option>
+                                <option value="MIDDLE">미들/피크</option>
+                                <option value="CLOSE">마감 정돈</option>
+                                <option value="HALL">홀 서빙</option>
+                                <option value="KITCHEN">주방 조리</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label fw-bold small text-dark">순서별 업무 체크리스트 (줄바꿈 구분)</label>
+                        <textarea name="checklist_content" class="form-control" rows="5" placeholder="1. 조명 켜기&#10;2. POS/태블릿 로그인&#10;3. 냉장고 온도 체크" required></textarea>
+                    </div>
+                    <div class="mb-0">
+                        <label class="form-label fw-bold small text-dark">비상 대처 요령 / 점주 비상연락</label>
+                        <input type="text" name="emergency_action" class="form-control" placeholder="예: 정전 시 차단기 확인 및 점주 즉시 연락(010-XXXX-XXXX)">
+                    </div>
+                </div>
+                <div class="modal-footer bg-light py-2 px-3 border-top">
+                    <button type="button" class="btn btn-secondary btn-sm rounded-pill px-3" data-bs-dismiss="modal">취소</button>
+                    <button type="submit" class="btn btn-primary btn-sm rounded-pill px-4 fw-bold">매뉴얼 등록</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+<?php endif; ?>
+
+<script>
+function previewSop(title, type, content, emergency) {
+    document.getElementById('ps_title').innerText = title;
+    document.getElementById('ps_type').innerText = type + ' 표준 절차';
+    document.getElementById('ps_content').innerText = content;
+    document.getElementById('ps_emergency').innerText = emergency || '-';
+    window.print();
+}
+</script>
+
+<?php
+include_once 'footer.php';
+?>
+</body>
+</html>

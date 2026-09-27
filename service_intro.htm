@@ -1,0 +1,381 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>서비스 소개 | 나오빌리</title>
+    <!-- Bootstrap 5 CSS -->
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <!-- FontAwesome Icons -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <!-- Pretendard WebFont -->
+    <link rel="stylesheet" as="style" crossorigin href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.min.css" />
+
+    <!-- [REFACTORED - SaaS 서비스 소개 현대화 스타일링] -->
+    <style>
+        body {
+            background-color: #f8fafc;
+            color: #1e293b;
+            font-family: 'Pretendard', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            line-height: 1.75;
+            letter-spacing: -0.015em;
+        }
+
+        ::-webkit-scrollbar { width: 8px; }
+        ::-webkit-scrollbar-track { background: #f1f5f9; }
+        ::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 4px; }
+        ::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
+
+        .hero-section {
+            background: linear-gradient(135deg, #0f172a 0%, #1e3a8a 50%, #2563eb 100%);
+            color: #ffffff;
+            padding: 85px 0 75px;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+        }
+        .hero-badge {
+            background: rgba(255, 255, 255, 0.15);
+            backdrop-filter: blur(8px);
+            border: 1px solid rgba(255, 255, 255, 0.25);
+            font-size: 0.85rem;
+            font-weight: 600;
+        }
+
+        .intro-container {
+            max-width: 1040px;
+            margin: -40px auto 60px;
+            position: relative;
+            z-index: 10;
+        }
+        .feature-card {
+            background: #ffffff;
+            border-radius: 16px;
+            border: 1px solid #e2e8f0;
+            padding: 35px 28px;
+            box-shadow: 0 4px 20px rgba(15, 23, 42, 0.04);
+            height: 100%;
+            transition: transform 0.2s cubic-bezier(0.16, 1, 0.3, 1), box-shadow 0.2s ease;
+        }
+        .feature-card:hover {
+            transform: translateY(-4px);
+            box-shadow: 0 12px 24px rgba(15, 23, 42, 0.08);
+        }
+        .icon-box {
+            width: 56px;
+            height: 56px;
+            border-radius: 14px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 1.4rem;
+            margin-bottom: 20px;
+        }
+
+        .step-pill {
+            background: #ffffff;
+            border-radius: 12px;
+            padding: 22px 18px;
+            border: 1px solid #e2e8f0;
+            border-left: 4px solid #2563eb;
+            height: 100%;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.02);
+        }
+        .step-num {
+            display: inline-block;
+            width: 26px;
+            height: 26px;
+            background: #2563eb;
+            color: #fff;
+            border-radius: 50%;
+            text-align: center;
+            line-height: 26px;
+            font-weight: 700;
+            font-size: 0.82rem;
+            margin-right: 8px;
+        }
+
+        .cta-box {
+            background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%);
+            color: #ffffff;
+            border-radius: 20px;
+            padding: 55px 30px;
+            text-align: center;
+            border: 1px solid rgba(255, 255, 255, 0.08);
+        }
+
+        /* 모달 내부 팝업 화면 볼 때 여백 최적화 */
+        body.in-modal-mode .navbar {
+            display: none !important;
+        }
+        body.in-modal-mode .hero-section {
+            padding: 38px 20px 32px !important;
+        }
+        body.in-modal-mode .hero-section h1 {
+            font-size: 1.7rem !important;
+        }
+        body.in-modal-mode .intro-container {
+            margin: -20px auto 30px !important;
+            padding: 0 20px !important;
+            max-width: 100% !important;
+            box-sizing: border-box !important;
+        }
+        body.in-modal-mode .feature-card {
+            padding: 24px 20px !important;
+        }
+        body.in-modal-mode .cta-box {
+            padding: 35px 20px !important;
+        }
+
+        @media (max-width: 768px) {
+            .hero-section {
+                padding: 50px 15px 60px;
+            }
+            .intro-container {
+                margin-top: -20px;
+                padding: 0 15px;
+            }
+            .feature-card {
+                padding: 25px 20px;
+            }
+        }
+
+        /* 인쇄(Print) 시 최적화 */
+        @media print {
+            @page {
+                size: A4;
+                margin: 15mm 15mm 15mm 15mm;
+            }
+            body {
+                background: #ffffff !important;
+                color: #000000 !important;
+            }
+            .navbar, #serviceFooterWrapper, .cta-box {
+                display: none !important;
+            }
+            .hero-section {
+                background: none !important;
+                color: #000000 !important;
+                padding: 10px 0 !important;
+                border-bottom: 1.5pt solid #333 !important;
+            }
+            .hero-section h1 {
+                color: #000 !important;
+                font-size: 18pt !important;
+            }
+            .intro-container {
+                max-width: 100% !important;
+                width: 100% !important;
+                margin: 0 !important;
+                padding: 0 !important;
+            }
+            .feature-card, .step-pill {
+                box-shadow: none !important;
+                border: 1pt solid #ccc !important;
+                page-break-inside: avoid;
+            }
+        }
+    </style>
+</head>
+<body>
+
+<nav class="navbar navbar-expand-lg bg-white border-bottom sticky-top py-3">
+    <div class="container" style="max-width: 1040px;">
+        <a class="navbar-brand fw-bold text-primary d-flex align-items-center" href="/" target="_top">
+            <i class="fa-solid fa-chart-pie me-2 fs-4"></i> 나오빌리
+        </a>
+        <div class="d-flex align-items-center gap-2">
+            <a href="/" target="_top" class="btn btn-outline-secondary btn-sm rounded-pill px-3">
+                <i class="fa-solid fa-house me-1"></i> 메인 홈
+            </a>
+            <a href="/dashboard.htm" target="_top" class="btn btn-primary btn-sm rounded-pill px-3 fw-semibold">
+                <i class="fa-solid fa-gauge-high me-1"></i> 대시보드 바로가기
+            </a>
+        </div>
+    </div>
+</nav>
+
+<section class="hero-section text-center">
+    <div class="container" style="max-width: 820px;">
+        <span class="badge hero-badge rounded-pill px-3 py-2 mb-3">
+            <i class="fa-solid fa-bolt text-warning me-1"></i> 소상공인을 위한 차세대 정산 인텔리전스
+        </span>
+        <h1 class="display-6 fw-bold mb-3">
+            통장에 진짜 남는 돈,<br><strong>나오빌리</strong>가 1원 단위까지 정산합니다
+        </h1>
+        <p class="lead mb-4 text-white-50 small" style="font-size: 1.05rem;">
+            화려한 겉보기 매출에 속지 마세요. 국세청 매출과 복잡한 배달 3사 수수료, 고정비까지 자동 연동하여 
+            사장님의 <strong>실제 순이익(Real Net Profit)</strong>을 실시간으로 추적·분석합니다.
+        </p>
+    </div>
+</section>
+
+<div class="container intro-container">
+
+    <div class="row g-4 mb-5">
+        <div class="col-md-4">
+            <div class="feature-card">
+                <div class="icon-box bg-primary bg-opacity-10 text-primary">
+                    <i class="fa-solid fa-rotate"></i>
+                </div>
+                <h5 class="fw-bold text-dark mb-2">원클릭 오픈 API 자동 연동</h5>
+                <p class="text-muted small mb-0">
+                    국세청 홈택스 카드/현금 매출부터 배달의민족, 쿠팡이츠, 요기요 배달 플랫폼 데이터까지 오픈 API로 실시간 수집·동기화합니다. 수기 입력의 번거로움은 끝납니다.
+                </p>
+            </div>
+        </div>
+        <div class="col-md-4">
+            <div class="feature-card">
+                <div class="icon-box bg-danger bg-opacity-10 text-danger">
+                    <i class="fa-solid fa-percent"></i>
+                </div>
+                <h5 class="fw-bold text-dark mb-2">투명한 플랫폼 수수료 추적</h5>
+                <p class="text-muted small mb-0">
+                    중개 이용료, 결제 수수료, 배달 대행료 등 매장마다 제각각인 숨은 비용을 정밀하게 분리 차감하여 채널별 실질 마진율을 즉시 파악할 수 있습니다.
+                </p>
+            </div>
+        </div>
+        <div class="col-md-4">
+            <div class="feature-card">
+                <div class="icon-box bg-success bg-opacity-10 text-success">
+                    <i class="fa-solid fa-brain"></i>
+                </div>
+                <h5 class="fw-bold text-dark mb-2">AI 기반 이상치 감지 및 전략</h5>
+                <p class="text-muted small mb-0">
+                    배달 대행료 급등, 수수료율 변동 이상 징후를 실시간 감지하여 경보를 울립니다. 매장 데이터를 학습한 AI가 이익 극대화를 위한 프로모션 전략을 브리핑합니다.
+                </p>
+            </div>
+        </div>
+    </div>
+
+    <div class="card border-0 shadow-sm rounded-4 p-4 p-md-5 mb-5 bg-white">
+        <div class="text-center max-w-600 mx-auto mb-4">
+            <span class="badge bg-primary-subtle text-primary border border-primary-subtle rounded-pill px-3 py-1 mb-2">
+                Flow Architecture
+            </span>
+            <h3 class="fw-bold text-dark mb-2">나오빌리의 4단계 실시간 손익 계산 엔진</h3>
+            <p class="text-muted small">매출 발생부터 통장에 꽂히는 순수익까지 논리적으로 계산합니다.</p>
+        </div>
+
+        <div class="row g-3">
+            <div class="col-md-3">
+                <div class="step-pill">
+                    <div class="d-flex align-items-center mb-2">
+                        <span class="step-num">1</span>
+                        <h6 class="fw-bold mb-0 text-dark">총매출 집계 (Gross)</h6>
+                    </div>
+                    <p class="text-muted small mb-0">
+                        홈택스 신용카드, 현금영수증 및 오프라인 POS 결제 데이터를 전량 수집합니다.
+                    </p>
+                </div>
+            </div>
+            <div class="col-md-3">
+                <div class="step-pill" style="border-left-color: #f59e0b;">
+                    <div class="d-flex align-items-center mb-2">
+                        <span class="step-num" style="background: #f59e0b;">2</span>
+                        <h6 class="fw-bold mb-0 text-dark">공제 수수료 정산</h6>
+                    </div>
+                    <p class="text-muted small mb-0">
+                        PG 카드 수수료(1.3%) 및 배달 3사의 건당 중개료와 배달료를 완벽 분리 공제합니다.
+                    </p>
+                </div>
+            </div>
+            <div class="col-md-3">
+                <div class="step-pill" style="border-left-color: #06b6d4;">
+                    <div class="d-flex align-items-center mb-2">
+                        <span class="step-num" style="background: #06b6d4;">3</span>
+                        <h6 class="fw-bold mb-0 text-dark">중간 집계 (매출이익)</h6>
+                    </div>
+                    <p class="text-muted small mb-0">
+                        수수료를 털어낸 후 배달 채널별 실제 마진과 순수 손에 쥐는 정산 순익을 확정합니다.
+                    </p>
+                </div>
+            </div>
+            <div class="col-md-3">
+                <div class="step-pill" style="border-left-color: #10b981;">
+                    <div class="d-flex align-items-center mb-2">
+                        <span class="step-num" style="background: #10b981;">4</span>
+                        <h6 class="fw-bold mb-0 text-dark">최종 순이익 (Net)</h6>
+                    </div>
+                    <p class="text-muted small mb-0">
+                        월세, 인건비, 식자재 원가율을 반영하여 사업자가 진짜 가져가는 알짜 순이익을 도출합니다.
+                    </p>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="row align-items-center g-4 mb-5">
+        <div class="col-md-6">
+            <span class="badge bg-dark rounded-pill px-3 py-1 mb-2">
+                <i class="fa-solid fa-cloud-bolt text-warning me-1"></i> 네이버클라우드 기반 보안
+            </span>
+            <h3 class="fw-bold text-dark mb-3">
+                금융권 수준의 데이터 암호화 및<br>실시간 모니터링 환경
+            </h3>
+            <p class="text-secondary small mb-3">
+                나오빌리는 사장님의 소중한 매출 및 정산 정보를 안전하게 보호하기 위해 <strong>네이버클라우드(주)</strong>의 공인 엔터프라이즈 인프라 위에서 운용됩니다.
+            </p>
+            <ul class="list-unstyled text-muted small mb-4">
+                <li class="mb-2"><i class="fa-solid fa-circle-check text-primary me-2"></i>모든 API 통신 구간 SSL 고도화 암호화 적용</li>
+                <li class="mb-2"><i class="fa-solid fa-circle-check text-primary me-2"></i>일별 매출 추이 라인 차트 및 채널 점유율 도넛 차트 시각화</li>
+                <li class="mb-2"><i class="fa-solid fa-circle-check text-primary me-2"></i>동일 상권/동종 업종 벤치마크 대비 매장 성과 상대비교 제공</li>
+            </ul>
+        </div>
+        <div class="col-md-6">
+            <div class="card border-0 shadow rounded-4 p-3 bg-light text-center">
+                <div class="py-5 px-3">
+                    <i class="fa-solid fa-chart-line text-primary mb-3" style="font-size: 3.5rem;"></i>
+                    <h5 class="fw-bold text-dark">AI 순이익 분석 대시보드</h5>
+                    <p class="text-muted small mb-3">직관적인 반응형 차트로 모바일, 태블릿, PC 어디서나 확인하세요.</p>
+                    <a href="/dashboard.htm" target="_top" class="btn btn-outline-primary btn-sm rounded-pill px-4">
+                        대시보드 체험하기
+                    </a>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="cta-box shadow-lg">
+        <h2 class="fw-bold mb-3">지금 바로 나오빌리와 함께 진짜 순이익을 확인하세요</h2>
+        <p class="text-white-50 mb-4 small" style="font-size: 1rem;">
+            복잡한 계산기는 이제 내려놓으세요. 나오빌리의 AI가 사장님의 성공적인 매장 운영을 함께합니다.
+        </p>
+        <div class="d-flex justify-content-center gap-3 flex-wrap">
+            <a href="/dashboard.htm" target="_top" class="btn btn-primary btn-lg rounded-pill px-4 fw-bold">
+                <i class="fa-solid fa-rocket me-1"></i> 대시보드 바로가기
+            </a>
+            <a href="/customer_center.htm" class="btn btn-outline-light btn-lg rounded-pill px-4">
+                고객센터 문의
+            </a>
+        </div>
+    </div>
+
+</div>
+
+<div id="serviceFooterWrapper">
+<?php
+	include_once 'footer.php';
+?>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+
+<script>
+    if (window.self !== window.top) {
+        document.body.classList.add('in-modal-mode');
+        const footerWrap = document.getElementById('serviceFooterWrapper');
+        if (footerWrap) footerWrap.style.display = 'none';
+    }
+		
+    // [로더 100% 해제 안전장치]
+    if (window.AppLoader && typeof window.AppLoader.hide === 'function') window.AppLoader.hide();
+    if (window.parent && window.parent.AppLoader && typeof window.parent.AppLoader.hide === 'function') window.parent.AppLoader.hide();
+
+    if (window.self !== window.top) {
+        document.body.classList.add('in-modal-mode');
+        // service_intro.htm의 경우 푸터 래퍼 숨김 처리 유지
+        const footerWrap = document.getElementById('serviceFooterWrapper');
+        if (footerWrap) footerWrap.style.display = 'none';
+    }
+</script>
+</body>
+</html>
