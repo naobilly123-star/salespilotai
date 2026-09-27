@@ -1,0 +1,154 @@
+<?php
+/* ========================================================================== */
+/* 👥 인건비 시뮬레이터 & 주휴수당 분할 최적화 계산기 (labor_cost_optimizer.htm) */
+/* - [실제 연계] 근로기준법상 주 15시간 미만 초단기 근로자 분할 인력 배치 효과 산출 */
+/* ========================================================================== */
+if (session_status() === PHP_SESSION_NONE) {
+    session_start();
+}
+ob_start();
+
+require_once 'db.php';
+
+if (!isset($_SESSION['user_id'])) {
+    header("Location: login.htm");
+    exit;
+}
+
+$user_id = (int)$_SESSION['user_id'];
+$user_role = $_SESSION['role'] ?? 'USER';
+
+// 법정 최저시급
+$base_min_wage = 10030;
+
+// 사업장 실제 월 인건비 지출액 조회
+$db_labor_cost = 0;
+try {
+    $e_stmt = $pdo->prepare("SELECT labor_cost FROM store_expenses WHERE user_id = ? LIMIT 1");
+    $e_stmt->execute([$user_id]);
+    $db_labor_cost = (int)($e_stmt->fetchColumn() ?: 0);
+} catch (PDOException $e) {}
+
+$simulation_result = null;
+
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['run_sim'])) {
+    $wage = max($base_min_wage, intval($_POST['hourly_wage'] ?? $base_min_wage));
+    $hours = max(1, intval($_POST['weekly_hours'] ?? 42));
+
+    // 플랜 A: 주 15시간 이상 근무 (주휴수당 100% 적용)
+    // 월 환산 배수: 365 / 7 / 12 = 약 4.345주
+    $plan_a_base = $wage * $hours * 4.345;
+    $plan_a_weekly_allow = ($hours >= 15) ? ($hours / 5) * $wage * 4.345 : 0;
+    $plan_a_total = round($plan_a_base + $plan_a_weekly_allow);
+
+    // 플랜 B: 주 14시간 이하 초단기 복수 인력 분할 (주휴수당 비발생)
+    $plan_b_total = round($wage * $hours * 4.345);
+    $monthly_savings = $plan_a_total - $plan_b_total;
+
+    $simulation_result = [
+        'wage' => $wage,
+        'hours' => $hours,
+        'plan_a_base' => round($plan_a_base),
+        'plan_a_allow' => round($plan_a_weekly_allow),
+        'plan_a_total' => $plan_a_total,
+        'plan_b_total' => $plan_b_total,
+        'monthly_savings' => $monthly_savings,
+        'annual_savings' => $monthly_savings * 12
+    ];
+}
+
+require_once 'header.php';
+?>
+
+<style>
+    .labor-title-responsive { font-size: clamp(1.15rem, 1.8vw, 1.75rem) !important; font-weight: 800 !important; color: #0f172a; }
+</style>
+
+<div class="row mb-4 align-items-center">
+    <div class="col-md-7">
+        <h3 class="fw-bold mb-1 labor-title-responsive">
+            <i class="fa-solid fa-users-gear text-primary me-2"></i>인건비 시뮬레이터 & 주휴수당 최적화 계산기
+        </h3>
+        <p class="text-muted mb-0 small">
+            근로기준법상 주 15시간 이상 시 발생하는 주휴수당(기본급의 약 20%)을 정밀 분석하여 법적 준수와 합법적 절감을 동시에 설계합니다.
+        </p>
+    </div>
+    <div class="col-md-5 text-md-end mt-3 mt-md-0">
+        <span class="badge bg-primary-subtle text-primary border border-primary-subtle px-3 py-2 rounded-pill small fw-bold">
+            <i class="fa-solid fa-scale-balanced me-1"></i>법정 최저시급: <?= number_format($base_min_wage) ?>원
+        </span>
+    </div>
+</div>
+
+<div class="row g-4 mb-4">
+    <div class="col-lg-5">
+        <div class="glass-card p-4 h-100">
+            <h5 class="fw-bold mb-3 text-dark"><i class="fa-solid fa-calculator text-primary me-2"></i>매장 근무 조건 시뮬레이션</h5>
+            <form method="POST" action="labor_cost_optimizer.htm">
+                <input type="hidden" name="run_sim" value="1">
+                <div class="mb-3">
+                    <label class="form-label fw-bold small text-dark">적용 시급 (원, 최저 <?= number_format($base_min_wage) ?>원)</label>
+                    <input type="number" name="hourly_wage" class="form-control" value="<?= htmlspecialchars($_POST['hourly_wage'] ?? (string)$base_min_wage) ?>" min="<?= $base_min_wage ?>" required>
+                </div>
+                <div class="mb-3">
+                    <label class="form-label fw-bold small text-dark">매장 총 필요 파트타임 시간 (주당 누적 시간)</label>
+                    <input type="number" name="weekly_hours" class="form-control" value="<?= htmlspecialchars($_POST['weekly_hours'] ?? '42') ?>" min="1" required>
+                    <div class="form-text small text-muted">예: 주 42시간 필요 시 (풀타임 1인 vs 주 14시간 알바 3인 분할)</div>
+                </div>
+                <button type="submit" class="btn btn-primary w-100 rounded-pill py-2 fw-bold shadow-sm">
+                    <i class="fa-solid fa-bolt me-1"></i>인건비 최적화 시뮬레이션 실행
+                </button>
+            </form>
+
+            <?php if ($db_labor_cost > 0): ?>
+                <div class="mt-4 p-3 bg-light rounded-3 border">
+                    <div class="small text-muted mb-1"><i class="fa-solid fa-receipt me-1"></i>현재 매장 등록 월 고정 인건비</div>
+                    <div class="fs-5 fw-bold text-dark"><?= number_format($db_labor_cost) ?>원</div>
+                </div>
+            <?php endif; ?>
+        </div>
+    </div>
+
+    <div class="col-lg-7">
+        <div class="glass-card p-4 h-100">
+            <h5 class="fw-bold mb-3 text-dark"><i class="fa-solid fa-chart-pie text-primary me-2"></i>인건비 비교 분석 및 순이익 개선 진단</h5>
+            <?php if ($simulation_result): ?>
+                <div class="row g-3 mb-3">
+                    <div class="col-6">
+                        <div class="p-3 bg-light rounded-3 border">
+                            <span class="text-muted small d-block mb-1">풀타임(주 15시간 이상) 월 지출</span>
+                            <div class="fs-4 fw-bold text-dark"><?= number_format($simulation_result['plan_a_total']) ?>원</div>
+                            <small class="text-danger">기본급 + 주휴수당(<?= number_format($simulation_result['plan_a_allow']) ?>원)</small>
+                        </div>
+                    </div>
+                    <div class="col-6">
+                        <div class="p-3 bg-success-subtle rounded-3 border border-success-subtle">
+                            <span class="text-success small d-block mb-1">초단기(주 14시간 분할) 월 지출</span>
+                            <div class="fs-4 fw-bold text-success"><?= number_format($simulation_result['plan_b_total']) ?>원</div>
+                            <small class="text-success">주휴수당 비발생 (순수 실근로)</small>
+                        </div>
+                    </div>
+                </div>
+                <div class="p-3 rounded-3 border border-primary-subtle bg-primary-subtle mb-3">
+                    <strong class="text-primary d-block mb-1"><i class="fa-solid fa-piggy-bank me-1"></i>합법적 순이익 추가 확보 효과</strong>
+                    <div class="fs-4 fw-bold text-primary mb-1">월 약 +<?= number_format($simulation_result['monthly_savings']) ?>원 절감</div>
+                    <small class="text-secondary">연간 환산 시 약 <strong><?= number_format($simulation_result['annual_savings']) ?>원</strong>의 실질 영업이익이 추가 확보됩니다.</small>
+                </div>
+                <div class="p-2 bg-light rounded border text-muted small" style="font-size: 0.76rem;">
+                    * 산출 근거: 1주 15시간 미만 초단기 근로자는 근로기준법 제18조 제3항에 따라 주휴수당 및 퇴직금 지급 대상에서 제외되며, 4대 보험 중 산재보험만 의무 가입(고용·국민·건강 면제)되어 간접비 절감 효과가 추가됩니다.
+                </div>
+            <?php else: ?>
+                <div class="text-center py-5 text-muted">
+                    <i class="fa-solid fa-user-clock fa-3x mb-3 opacity-50"></i>
+                    <p class="mb-0">좌측에서 시급과 주당 필요 시간을 입력한 뒤 시뮬레이션을 실행하세요.</p>
+                </div>
+            <?php endif; ?>
+        </div>
+    </div>
+</div>
+
+<?php
+include_once 'footer.php';
+?>
+</body>
+</html>

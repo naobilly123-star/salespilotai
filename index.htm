@@ -1,0 +1,12 @@
+<?php
+session_start();
+
+// 로그인 상태 체크 후 페이지 리다이렉션
+if (isset($_SESSION['user_id']) || (isset($_SESSION['logged_in']) && $_SESSION['logged_in'] === true)) {
+    header("Location: dashboard.htm");
+    exit();
+} else {
+    header("Location: login.htm");
+    exit();
+}
+?>

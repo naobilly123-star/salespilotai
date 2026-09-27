@@ -1,0 +1,354 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>위치기반서비스 이용약관 | 나오빌리</title>
+    <!-- Bootstrap 5 CSS -->
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <!-- FontAwesome Icons -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <!-- Pretendard WebFont -->
+    <link rel="stylesheet" as="style" crossorigin href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.min.css" />
+
+    <!-- [REFACTORED - 위치정보법 표준 약관 서식 최적화] -->
+    <style>
+        body {
+            background-color: #f8fafc;
+            color: #1e293b;
+            font-family: 'Pretendard', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            line-height: 1.75;
+            letter-spacing: -0.015em;
+        }
+
+        ::-webkit-scrollbar { width: 8px; }
+        ::-webkit-scrollbar-track { background: #f1f5f9; }
+        ::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 4px; }
+        ::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
+
+        .terms-container {
+            max-width: 960px; /* 900px -> 960px 확장 */
+            margin: 40px auto 60px;
+            background: #ffffff;
+            padding: 40px 42px; /* 좌우 패딩 52px -> 42px */
+            border-radius: 16px;
+            box-shadow: 0 4px 20px rgba(15, 23, 42, 0.05);
+            border: 1px solid #e2e8f0;
+        }
+        .terms-header {
+            border-bottom: 2px solid #e2e8f0;
+            padding-bottom: 25px;
+            margin-bottom: 35px;
+        }
+        .terms-header h1 {
+            font-size: 1.85rem;
+            font-weight: 800;
+            color: #0f172a;
+            letter-spacing: -0.025em;
+        }
+        .terms-section {
+            margin-bottom: 32px;
+        }
+        .terms-section h2 {
+            font-size: 1.15rem;
+            font-weight: 700;
+            color: #0f172a;
+            margin-bottom: 12px;
+            display: flex;
+            align-items: center;
+        }
+        .terms-section h2::before {
+            content: "";
+            display: inline-block;
+            width: 4px;
+            height: 18px;
+            background-color: #0284c7;
+            margin-right: 10px;
+            border-radius: 2px;
+        }
+        .terms-section p, .terms-section li {
+            font-size: 0.94rem;
+            color: #475569;
+            margin-bottom: 8px;
+        }
+        .terms-section ul, .terms-section ol {
+            padding-left: 20px;
+            margin-bottom: 12px;
+        }
+        .highlight-box {
+            background-color: #f0f9ff;
+            border-left: 4px solid #0284c7;
+            padding: 18px 22px;
+            border-radius: 8px;
+            margin-bottom: 28px;
+            font-size: 0.92rem;
+            color: #0369a1;
+        }
+        .appendix-card {
+            background: #f8fafc;
+            border: 1px solid #e2e8f0;
+            border-radius: 12px;
+            padding: 24px 26px;
+            margin-top: 40px;
+        }
+        .appendix-card h3 {
+            font-size: 1.05rem;
+            font-weight: 700;
+            color: #0f172a;
+            margin-bottom: 12px;
+        }
+        .appendix-list {
+            list-style: none;
+            padding-left: 0;
+            margin-bottom: 0;
+            font-size: 0.9rem;
+        }
+        .appendix-list li {
+            margin-bottom: 6px;
+        }
+
+        /* 모달 내부 팝업 화면 볼 때 여백 최적화 */
+        body.in-modal-mode {
+            background-color: #ffffff !important;
+        }
+        body.in-modal-mode .main-wrapper-container {
+            max-width: 100% !important;
+            padding: 0 !important;
+            margin: 0 !important;
+        }
+        body.in-modal-mode .terms-container {
+            margin: 0 !important;
+            padding: 28px 28px !important;
+            box-shadow: none !important;
+            border: none !important;
+            border-radius: 0 !important;
+            max-width: 100% !important;
+            width: 100% !important;
+            box-sizing: border-box !important;
+        }
+        body.in-modal-mode .top-nav-bar {
+            display: none !important;
+        }
+        body.in-modal-mode .terms-header {
+            margin-bottom: 25px;
+            padding-bottom: 15px;
+        }
+        body.in-modal-mode .terms-header h1 {
+            font-size: 1.5rem !important;
+        }
+
+        @media (max-width: 768px) {
+            .terms-container {
+                padding: 22px 18px !important;
+                margin: 15px auto 30px !important;
+            }
+            .terms-header h1 {
+                font-size: 1.5rem;
+            }
+        }
+
+        /* 인쇄(Print) 시 여백 및 스타일 최적화 */
+        @media print {
+            @page {
+                size: A4;
+                margin: 15mm 15mm 15mm 15mm;
+            }
+            body {
+                background: #ffffff !important;
+                color: #000000 !important;
+                font-size: 10pt;
+                line-height: 1.6;
+            }
+            .main-wrapper-container, .terms-container {
+                max-width: 100% !important;
+                width: 100% !important;
+                margin: 0 !important;
+                padding: 0 !important;
+                border: none !important;
+                box-shadow: none !important;
+            }
+            .top-nav-bar, .text-center.mt-4 {
+                display: none !important;
+            }
+            .terms-header {
+                padding-bottom: 15px !important;
+                margin-bottom: 20px !important;
+                border-bottom: 1.5pt solid #333 !important;
+            }
+            .terms-header h1 {
+                font-size: 18pt !important;
+                color: #000 !important;
+            }
+            .highlight-box {
+                background-color: #f8fafc !important;
+                border-left: 3pt solid #000 !important;
+                color: #000 !important;
+                padding: 10px 14px !important;
+                margin-bottom: 18px !important;
+            }
+            .terms-section h2 {
+                font-size: 12pt !important;
+                color: #000 !important;
+                margin-top: 15px !important;
+                page-break-after: avoid;
+            }
+            .terms-section h2::before {
+                background-color: #000 !important;
+            }
+            .terms-section p, .terms-section li {
+                color: #111 !important;
+                font-size: 9.5pt !important;
+            }
+            .appendix-card {
+                border: 1pt solid #ccc !important;
+                background: transparent !important;
+                padding: 15px !important;
+                margin-top: 20px !important;
+                page-break-inside: avoid;
+            }
+        }
+    </style>
+</head>
+<body>
+
+<!-- 모달 모드일 때 Bootstrap container의 여백 제약을 풀 수 있도록 고유 클래스(main-wrapper-container) 부여 -->
+<div class="container main-wrapper-container">
+    <div class="terms-container">
+        <div class="d-flex justify-content-between align-items-center mb-3 top-nav-bar">
+            <a href="/" target="_top" class="btn btn-outline-secondary btn-sm rounded-pill px-3">
+                <i class="fa-solid fa-arrow-left me-1"></i> 메인으로 돌아가기
+            </a>
+            <span class="badge bg-info-subtle text-info border border-info-subtle px-3 py-2 rounded-pill">
+                시행일자: 2026년 09월 14일
+            </span>
+        </div>
+
+        <header class="terms-header">
+            <h1><i class="fa-solid fa-location-dot text-info me-2"></i>나오빌리 위치기반서비스 이용약관</h1>
+            <p class="text-muted mb-0 small">
+                본 약관은 나오빌리가 제공하는 상권 분석, 인근 매장 벤치마킹 및 위치기반 부가서비스의 이용과 관련하여 회사와 이용자 간의 권리·의무 및 책임사항을 규정합니다.
+            </p>
+        </header>
+
+        <div class="highlight-box">
+            <i class="fa-solid fa-circle-info me-2"></i>
+            <strong>위치정보 보호 안내</strong><br>
+            나오빌리는 「위치정보의 보호 및 이용 등에 관한 법률」을 준수하며, 소상공인 사장님의 사업장 위치정보를 기반으로 최적화된 상권 비교 분석 리포트 및 배달권역 분석 서비스를 안전하게 제공합니다.
+        </div>
+
+        <section class="terms-section">
+            <h2>제1조 (목적)</h2>
+            <p>본 약관은 나오빌리(이하 "회사"라 합니다)가 제공하는 위치기반서비스(이하 "서비스"라 합니다)를 이용함에 있어 "회사"와 "이용자"의 권리·의무 및 책임사항, 기타 필요한 사항을 규정함을 목적으로 합니다.</p>
+        </section>
+
+        <section class="terms-section">
+            <h2>제2조 (약관 외 준칙)</h2>
+            <p>본 약관에 명시되지 않은 사항은 「위치정보의 보호 및 이용 등에 관한 법률」, 「개인정보 보호법」, 「정보통신망 이용촉진 및 정보보호 등에 관한 법률」, 「전기통신기본법」 및 회사의 서비스 이용약관, 개인정보처리방침 등 관련 법령 또는 상관례에 따릅니다.</p>
+        </section>
+
+        <section class="terms-section">
+            <h2>제3조 (서비스의 내용 및 요금)</h2>
+            <ol>
+                <li>회사는 위치정보사업자로부터 수집하거나 이용자가 등록한 위치정보(사업장 주소, GPS 좌표, 행정동 정보 등)를 활용하여 다음과 같은 서비스를 제공합니다.
+                    <ul>
+                        <li><strong>상권 및 벤치마크 분석:</strong> 사업장 위치를 기반으로 한 동일 상권 및 동종 업종 매출/단가 비교 분석 정보 제공</li>
+                        <li><strong>배달 권역 및 배송비 최적화 리포트:</strong> 매장 중심 반경별 배달 호출 및 수수료 효율성 분석 서비스</li>
+                        <li><strong>AI 마케팅 타겟팅 추천:</strong> 사업장 인근 유동인구 및 상권 특성에 맞춤화된 AI 프로모션 전략 제시</li>
+                    </ul>
+                </li>
+                <li>회사가 제공하는 위치기반서비스의 기본 기능은 무료입니다. 단, 정밀 상권 빅데이터 분석 등 유료 서비스의 경우 별도 요금을 부과할 수 있습니다.</li>
+            </ol>
+        </section>
+
+        <section class="terms-section">
+            <h2>제4조 (개인위치정보의 이용 또는 제공)</h2>
+            <ol>
+                <li>회사는 서비스를 제공하기 위하여 이용자의 동의를 얻어 개인위치정보를 수집·이용합니다.</li>
+                <li>회사는 개인위치정보주체의 사전 동의 없이 개인위치정보를 제3자에게 제공하지 아니하며, 제3자 제공 시에는 제공받는 자, 제공일시 및 제공목적을 즉시 통보합니다.</li>
+            </ol>
+        </section>
+
+        <section class="terms-section">
+            <h2>제5조 (개인위치정보주체의 권리)</h2>
+            <ol>
+                <li>이용자는 회사에 대하여 언제든지 개인위치정보 수집·이용·제공에 대한 동의 철회 또는 일시적 중지를 요구할 수 있습니다.</li>
+                <li>이용자는 본인에 대한 위치정보 수집·이용·제공 사실 확인자료의 열람 또는 고지를 요구할 수 있습니다.</li>
+            </ol>
+        </section>
+
+        <section class="terms-section">
+            <h2>제6조 (위치정보 이용·제공사실 확인자료의 보유근거 및 기간)</h2>
+            <p>회사는 「위치정보의 보호 및 이용 등에 관한 법률」 제16조 제2항에 따라 위치정보 이용·제공사실 확인자료를 시스템에 자동으로 기록·보존하며, 해당 자료는 <strong>6개월</strong>간 보관 후 지체 없이 파기합니다.</p>
+        </section>
+
+        <section class="terms-section">
+            <h2>제7조 (손해배상 및 면책)</h2>
+            <ol>
+                <li>회사가 위치정보법을 위반한 행위로 손해가 발생한 경우 회원은 손해배상을 청구할 수 있습니다. 단, 회사는 고의 또는 과실이 없음을 입증한 경우 책임을 면합니다.</li>
+                <li>천재지변 등 불가항력적인 사유로 인하여 서비스를 제공할 수 없는 때에는 서비스 제공 책임이 면제됩니다.</li>
+            </ol>
+        </section>
+
+        <section class="terms-section">
+            <h2>제8조 (사업자 정보 및 위치정보 관리책임자)</h2>
+            <p>회사는 위치정보를 적절히 보호·관리하기 위해 위치정보 관리책임자를 지정해 운영하고 있습니다.</p>
+            
+            <div class="card border-0 bg-light p-3 my-3" style="border-radius: 12px;">
+                <div class="row">
+                    <div class="col-md-6">
+                        <h6 class="fw-bold text-dark mb-2"><i class="fa-solid fa-user-shield text-info me-1"></i> 위치정보 관리책임자</h6>
+                        <ul class="list-unstyled small mb-0">
+                            <li><strong>성명:</strong> 함민석</li>
+                            <li><strong>직책:</strong> 대표</li>
+                            <li><strong>연락처:</strong> 0507-1319-3897</li>
+                            <li><strong>이메일:</strong> naobilly123@naver.com</li>
+                        </ul>
+                    </div>
+                    <div class="col-md-6 mt-3 mt-md-0">
+                        <h6 class="fw-bold text-dark mb-2"><i class="fa-solid fa-building text-primary me-1"></i> 사업자 정보</h6>
+                        <ul class="list-unstyled small mb-0 text-muted">
+                            <li><strong>상호:</strong> 나오빌리</li>
+                            <li><strong>사업자등록번호:</strong> 601-16-09294</li>
+                            <li><strong>주소:</strong> 서울특별시 송파구 백제고분로46길 22, 2층 602호</li>
+                        </ul>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <div class="appendix-card">
+            <h3>부칙</h3>
+            <p class="mb-0 text-muted small">제1조 (시행일) 본 약관은 <strong>2026년 09월 14일</strong>부터 시행합니다.</p>
+        </div>
+
+        <div class="text-center mt-4">
+            <button type="button" onclick="window.print();" class="btn btn-outline-dark rounded-pill px-4 me-2">
+                <i class="fa-solid fa-print me-1"></i> 약관 인쇄
+            </button>
+            <a href="/" target="_top" class="btn btn-primary rounded-pill px-4">
+                확인 및 메인 이동
+            </a>
+        </div>
+    </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+
+<script>
+    if (window.self !== window.top) {
+        document.body.classList.add('in-modal-mode');
+    }
+		
+    // [로더 100% 해제 안전장치]
+    if (window.AppLoader && typeof window.AppLoader.hide === 'function') window.AppLoader.hide();
+    if (window.parent && window.parent.AppLoader && typeof window.parent.AppLoader.hide === 'function') window.parent.AppLoader.hide();
+
+    if (window.self !== window.top) {
+        document.body.classList.add('in-modal-mode');
+        // service_intro.htm의 경우 푸터 래퍼 숨김 처리 유지
+        const footerWrap = document.getElementById('serviceFooterWrapper');
+        if (footerWrap) footerWrap.style.display = 'none';
+    }
+</script>
+</body>
+</html>

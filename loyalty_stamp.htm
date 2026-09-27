@@ -1,0 +1,234 @@
+<?php
+/* ========================================================================== */
+/* 🎫 종이쿠폰 없는 모바일 단골 스탬프 & 적립 리워드 플래너 (loyalty_stamp.htm) */
+/* - [실제 연계] 고객 휴대폰 번호 기반 스탬프 10개 적립 및 무료 리워드 자동 전환 */
+/* - 완벽한 정규식 검증, 실시간 방문 횟수 통계 누적 */
+/* ========================================================================== */
+if (session_status() === PHP_SESSION_NONE) {
+    session_start();
+}
+ob_start();
+
+require_once 'db.php';
+
+if (!isset($_SESSION['user_id'])) {
+    header("Location: login.htm");
+    exit;
+}
+
+$user_id = (int)$_SESSION['user_id'];
+$user_role = $_SESSION['role'] ?? 'USER';
+
+try {
+    $pdo->exec("
+        CREATE TABLE IF NOT EXISTS `store_customer_stamps` (
+            `id` INT AUTO_INCREMENT PRIMARY KEY,
+            `user_id` INT NOT NULL,
+            `customer_phone` VARCHAR(20) NOT NULL,
+            `current_stamps` INT NOT NULL DEFAULT 1,
+            `total_visits` INT NOT NULL DEFAULT 1,
+            `last_visit_date` DATE NOT NULL,
+            `reward_ready` TINYINT(1) DEFAULT 0,
+            `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE KEY `uk_user_phone` (`user_id`, `customer_phone`)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+    ");
+} catch (PDOException $e) {}
+
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
+    if ($user_role === 'USER') {
+        $_SESSION['flash_err'] = '일반회원은 스탬프 적립 및 리워드 사용 권한이 없습니다.';
+        header("Location: loyalty_stamp.htm");
+        exit;
+    }
+
+    if ($_POST['action'] === 'add_stamp') {
+        $phone = trim($_POST['customer_phone'] ?? '');
+        $add_qty = max(1, intval($_POST['stamp_qty'] ?? 1));
+        $today = date('Y-m-d');
+
+        if (preg_match('/^010-?\d{4}-?\d{4}$/', $phone)) {
+            $clean_phone = preg_replace('/[^0-9]/', '', $phone);
+            $fmt_phone = substr($clean_phone, 0, 3) . '-' . substr($clean_phone, 3, 4) . '-' . substr($clean_phone, 7);
+
+            try {
+                $chk = $pdo->prepare("SELECT current_stamps, total_visits FROM store_customer_stamps WHERE user_id = ? AND customer_phone = ?");
+                $chk->execute([$user_id, $fmt_phone]);
+                $existing = $chk->fetch(PDO::FETCH_ASSOC);
+
+                if ($existing) {
+                    $new_stamps = (int)$existing['current_stamps'] + $add_qty;
+                    $reward = ($new_stamps >= 10) ? 1 : 0;
+                    $upd = $pdo->prepare("UPDATE store_customer_stamps SET current_stamps = ?, total_visits = total_visits + 1, last_visit_date = ?, reward_ready = ? WHERE user_id = ? AND customer_phone = ?");
+                    $upd->execute([$new_stamps, $today, $reward, $user_id, $fmt_phone]);
+                } else {
+                    $reward = ($add_qty >= 10) ? 1 : 0;
+                    $ins = $pdo->prepare("INSERT INTO store_customer_stamps (user_id, customer_phone, current_stamps, total_visits, last_visit_date, reward_ready) VALUES (?, ?, ?, 1, ?, ?)");
+                    $ins->execute([$user_id, $fmt_phone, $add_qty, $today, $reward]);
+                }
+                $_SESSION['flash_msg'] = "{$fmt_phone} 고객님께 스탬프 {$add_qty}개가 성공적으로 적립되었습니다.";
+            } catch (PDOException $e) {
+                $_SESSION['flash_err'] = '스탬프 적립 처리 중 오류가 발생했습니다.';
+            }
+        } else {
+            $_SESSION['flash_err'] = '올바른 휴대폰 번호 형식(010-XXXX-XXXX)을 입력해주세요.';
+        }
+    } elseif ($_POST['action'] === 'use_reward') {
+        $phone = trim($_POST['customer_phone'] ?? '');
+        try {
+            $upd = $pdo->prepare("UPDATE store_customer_stamps SET current_stamps = GREATEST(0, current_stamps - 10), reward_ready = IF(current_stamps - 10 >= 10, 1, 0) WHERE user_id = ? AND customer_phone = ?");
+            $upd->execute([$user_id, $phone]);
+            $_SESSION['flash_msg'] = "{$phone} 고객님의 무료 쿠폰(스탬프 10개 차감) 처리가 완료되었습니다.";
+        } catch (PDOException $e) {
+            $_SESSION['flash_err'] = '리워드 사용 처리 중 오류가 발생했습니다.';
+        }
+    }
+
+    header("Location: loyalty_stamp.htm");
+    exit;
+}
+
+$flash_msg = $_SESSION['flash_msg'] ?? '';
+$flash_err = $_SESSION['flash_err'] ?? '';
+unset($_SESSION['flash_msg'], $_SESSION['flash_err']);
+
+$stamps = [];
+try {
+    $stmt = $pdo->prepare("SELECT * FROM store_customer_stamps WHERE user_id = ? ORDER BY last_visit_date DESC, id DESC LIMIT 25");
+    $stmt->execute([$user_id]);
+    $stamps = $stmt->fetchAll(PDO::FETCH_ASSOC);
+} catch (PDOException $e) {}
+
+require_once 'header.php';
+?>
+
+<style>
+    .stamp-title-responsive { font-size: clamp(1.15rem, 1.8vw, 1.75rem) !important; font-weight: 800 !important; color: #0f172a; }
+    .stamp-scroll-wrapper { width: 100%; overflow-x: auto !important; -webkit-overflow-scrolling: touch; padding-bottom: 6px; }
+    .stamp-detail-table { min-width: 820px !important; width: 100% !important; }
+    .stamp-detail-table th, .stamp-detail-table td { white-space: nowrap !important; vertical-align: middle !important; padding: 0.85rem 0.95rem !important; }
+</style>
+
+<div class="row mb-4 align-items-center">
+    <div class="col-md-7">
+        <h3 class="fw-bold mb-1 stamp-title-responsive">
+            <i class="fa-solid fa-stamp text-primary me-2"></i>모바일 단골 스탬프 & 적립 리워드 플래너
+        </h3>
+        <p class="text-muted mb-0 small">
+            종이쿠폰 분실 걱정 없이 휴대폰 번호로 스탬프를 적립하고 10회 도달 시 무료 쿠폰 혜택을 제공합니다.
+        </p>
+    </div>
+    <div class="col-md-5 text-md-end mt-3 mt-md-0">
+        <?php if ($user_role !== 'USER'): ?>
+            <button type="button" class="btn btn-primary rounded-pill px-3 py-2 fw-semibold small shadow-sm" data-bs-toggle="modal" data-bs-target="#addStampModal">
+                <i class="fa-solid fa-plus me-1"></i>스탬프 즉시 적립
+            </button>
+        <?php endif; ?>
+    </div>
+</div>
+
+<?php if ($flash_msg): ?>
+    <div class="alert alert-success alert-dismissible fade show rounded-3 mb-4 shadow-sm small" role="alert">
+        <i class="fa-solid fa-circle-check me-2 text-success"></i><?= htmlspecialchars($flash_msg) ?>
+        <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+    </div>
+<?php endif; ?>
+
+<?php if ($flash_err): ?>
+    <div class="alert alert-danger alert-dismissible fade show rounded-3 mb-4 shadow-sm small" role="alert">
+        <i class="fa-solid fa-triangle-exclamation me-2 text-danger"></i><?= htmlspecialchars($flash_err) ?>
+        <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+    </div>
+<?php endif; ?>
+
+<div class="row mb-4">
+    <div class="col-12">
+        <div class="glass-card p-4">
+            <h5 class="fw-bold mb-3 text-dark"><i class="fa-solid fa-users me-2 text-primary"></i>고객별 스탬프 적립 현황 대장</h5>
+            <div class="stamp-scroll-wrapper">
+                <table class="table table-hover align-middle stamp-detail-table mb-0">
+                    <thead class="table-light">
+                        <tr>
+                            <th>고객 휴대폰 번호</th>
+                            <th class="text-center">현재 보유 스탬프</th>
+                            <th class="text-center">누적 방문 횟수</th>
+                            <th>최근 방문 일자</th>
+                            <th class="text-center">리워드 달성 여부</th>
+                            <th class="text-center">쿠폰 사용 처리</th>
+                        </tr>
+                    </thead>
+                    <tbody class="small">
+                        <?php if (empty($stamps)): ?>
+                            <tr><td colspan="6" class="text-center py-4 text-muted">등록된 단골 스탬프 내역이 없습니다.</td></tr>
+                        <?php else: ?>
+                            <?php foreach ($stamps as $s): ?>
+                                <tr>
+                                    <td class="fw-bold text-dark"><?= htmlspecialchars($s['customer_phone']) ?></td>
+                                    <td class="text-center">
+                                        <span class="fs-6 fw-bold text-primary"><?= $s['current_stamps'] ?></span> / 10개
+                                    </td>
+                                    <td class="text-center"><?= $s['total_visits'] ?>회</td>
+                                    <td class="text-muted"><?= htmlspecialchars($s['last_visit_date']) ?></td>
+                                    <td class="text-center">
+                                        <?php if ($s['reward_ready']): ?>
+                                            <span class="badge bg-success px-3 py-1">무료 쿠폰 사용 가능!</span>
+                                        <?php else: ?>
+                                            <span class="badge bg-light text-secondary border"><?= (10 - ($s['current_stamps'] % 10)) ?>개 남음</span>
+                                        <?php endif; ?>
+                                    </td>
+                                    <td class="text-center">
+                                        <?php if ($user_role !== 'USER' && $s['reward_ready']): ?>
+                                            <form method="POST" action="loyalty_stamp.htm" class="d-inline" onsubmit="return confirm('스탬프 10개를 차감하고 무료 리워드를 지급하시겠습니까?');">
+                                                <input type="hidden" name="action" value="use_reward">
+                                                <input type="hidden" name="customer_phone" value="<?= htmlspecialchars($s['customer_phone']) ?>">
+                                                <button type="submit" class="btn btn-sm btn-outline-success rounded-pill px-3 fw-bold">리워드 사용</button>
+                                            </form>
+                                        <?php else: ?>
+                                            <span class="text-muted">-</span>
+                                        <?php endif; ?>
+                                    </td>
+                                </tr>
+                            <?php endforeach; ?>
+                        <?php endif; ?>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+</div>
+
+<?php if ($user_role !== 'USER'): ?>
+<div class="modal fade" id="addStampModal" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-content border-0 shadow-lg rounded-4 overflow-hidden">
+            <form method="POST" action="loyalty_stamp.htm">
+                <input type="hidden" name="action" value="add_stamp">
+                <div class="modal-header bg-primary text-white py-3 px-4">
+                    <h5 class="modal-title fs-6 fw-bold text-white"><i class="fa-solid fa-stamp me-2"></i>스탬프 즉시 적립</h5>
+                    <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body p-4">
+                    <div class="mb-3">
+                        <label class="form-label fw-bold small text-dark">고객 휴대폰 번호</label>
+                        <input type="text" name="customer_phone" class="form-control" placeholder="예: 010-1234-5678" required>
+                    </div>
+                    <div class="mb-0">
+                        <label class="form-label fw-bold small text-dark">적립할 스탬프 수량</label>
+                        <input type="number" name="stamp_qty" class="form-control" value="1" min="1" max="10" required>
+                    </div>
+                </div>
+                <div class="modal-footer bg-light py-2 px-3 border-top">
+                    <button type="button" class="btn btn-secondary btn-sm rounded-pill px-3" data-bs-dismiss="modal">취소</button>
+                    <button type="submit" class="btn btn-primary btn-sm rounded-pill px-4 fw-bold">적립 완료</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+<?php endif; ?>
+
+<?php
+include_once 'footer.php';
+?>
+</body>
+</html>

@@ -1,0 +1,322 @@
+<?php
+/* ========================================================================== */
+/* 🔧 주방 설비·냉난방기 정기 유지보수 & 교체주기 계산기 (equipment_maintenance.htm) */
+/* - 제빙기 필터, 에어컨 분해세척, 튀김기 정기 점검 D-Day 자동 역산 관리 */
+/* - 점검 완료 시 차기 점검 예정일 자동 갱신, 모바일 터치 가로 스크롤 대응 */
+/* ========================================================================== */
+if (session_status() === PHP_SESSION_NONE) {
+    session_start();
+}
+ob_start();
+
+require_once 'db.php';
+
+if (!isset($_SESSION['user_id'])) {
+    header("Location: login.htm");
+    exit;
+}
+
+$user_id = (int)$_SESSION['user_id'];
+$user_role = $_SESSION['role'] ?? 'USER';
+$store_name = $_SESSION['store_name'] ?? '내 매장';
+
+try {
+    $pdo->exec("
+        CREATE TABLE IF NOT EXISTS `store_equipment_records` (
+            `id` INT AUTO_INCREMENT PRIMARY KEY,
+            `user_id` INT NOT NULL,
+            `equipment_name` VARCHAR(80) NOT NULL COMMENT '장비명 (제빙기, 에어컨, 튀김기 등)',
+            `maintenance_type` VARCHAR(50) NOT NULL COMMENT '점검 항목 (필터교체, 분해세척 등)',
+            `cycle_days` INT NOT NULL DEFAULT 90 COMMENT '점검 주기(일)',
+            `last_maintained_date` DATE NOT NULL COMMENT '최근 점검일',
+            `next_due_date` DATE NOT NULL COMMENT '차기 점검 예정일',
+            `cost_estimate` INT DEFAULT 0 COMMENT '예상 유지비용(원)',
+            `manager_note` VARCHAR(150) NULL COMMENT '관리 메모/업체 연락처',
+            `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            KEY `idx_user_due` (`user_id`, `next_due_date`)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+    ");
+} catch (PDOException $e) {}
+
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
+    if ($user_role === 'USER') {
+        $_SESSION['flash_err'] = '일반회원(읽기 전용)은 장비 유지보수 등록 권한이 없습니다.';
+        header("Location: equipment_maintenance.htm");
+        exit;
+    }
+
+    if ($_POST['action'] === 'add_equipment') {
+        $name = trim($_POST['equipment_name'] ?? '');
+        $type = trim($_POST['maintenance_type'] ?? '정기 필터 세척');
+        $cycle = max(7, intval($_POST['cycle_days'] ?? 90));
+        $last_date = trim($_POST['last_maintained_date'] ?? date('Y-m-d'));
+        $cost = max(0, intval($_POST['cost_estimate'] ?? 0));
+        $note = trim($_POST['manager_note'] ?? '');
+
+        $next_date = date('Y-m-d', strtotime("{$last_date} + {$cycle} days"));
+
+        if (!empty($name)) {
+            try {
+                $ins = $pdo->prepare("
+                    INSERT INTO store_equipment_records 
+                    (user_id, equipment_name, maintenance_type, cycle_days, last_maintained_date, next_due_date, cost_estimate, manager_note) 
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                ");
+                $ins->execute([$user_id, $name, $type, $cycle, $last_date, $next_date, $cost, $note]);
+                $_SESSION['flash_msg'] = "장비 '{$name}'의 정기 유지보수 플랜이 등록되었습니다.";
+            } catch (PDOException $e) {
+                $_SESSION['flash_err'] = '유지보수 항목 등록 중 오류가 발생했습니다.';
+            }
+        }
+    } elseif ($_POST['action'] === 'complete_maintenance') {
+        $rec_id = intval($_POST['record_id'] ?? 0);
+        $cycle = max(7, intval($_POST['cycle_days'] ?? 90));
+        $today = date('Y-m-d');
+        $next = date('Y-m-d', strtotime("{$today} + {$cycle} days"));
+
+        try {
+            $upd = $pdo->prepare("UPDATE store_equipment_records SET last_maintained_date = ?, next_due_date = ? WHERE id = ? AND user_id = ?");
+            $upd->execute([$today, $next, $rec_id, $user_id]);
+            $_SESSION['flash_msg'] = "점검이 완료 처리되어 다음 점검일이 갱신되었습니다.";
+        } catch (PDOException $e) {
+            $_SESSION['flash_err'] = '점검 완료 처리 중 오류가 발생했습니다.';
+        }
+    } elseif ($_POST['action'] === 'delete_record') {
+        $del_id = intval($_POST['record_id'] ?? 0);
+        try {
+            $del = $pdo->prepare("DELETE FROM store_equipment_records WHERE id = ? AND user_id = ?");
+            $del->execute([$del_id, $user_id]);
+            $_SESSION['flash_msg'] = '선택하신 장비 이력이 삭제되었습니다.';
+        } catch (PDOException $e) {
+            $_SESSION['flash_err'] = '삭제 처리 중 오류가 발생했습니다.';
+        }
+    }
+
+    header("Location: equipment_maintenance.htm");
+    exit;
+}
+
+$flash_msg = $_SESSION['flash_msg'] ?? '';
+$flash_err = $_SESSION['flash_err'] ?? '';
+unset($_SESSION['flash_msg'], $_SESSION['flash_err']);
+
+$records = [];
+try {
+    $stmt = $pdo->prepare("SELECT * FROM store_equipment_records WHERE user_id = ? ORDER BY next_due_date ASC");
+    $stmt->execute([$user_id]);
+    $records = $stmt->fetchAll(PDO::FETCH_ASSOC);
+} catch (PDOException $e) {}
+
+if (empty($records)) {
+    $records = [
+        [
+            'id' => 0, 'equipment_name' => '제빙기 (호시자키)', 'maintenance_type' => '정수 필터 교체 & 노즐 살균',
+            'cycle_days' => 90, 'last_maintained_date' => date('Y-m-d', strtotime('-80 days')),
+            'next_due_date' => date('Y-m-d', strtotime('+10 days')), 'cost_estimate' => 45000,
+            'manager_note' => '필터 모델: 3M HF40, 자체 교체 가능'
+        ],
+        [
+            'id' => 0, 'equipment_name' => '천장형 4Way 냉난방기', 'maintenance_type' => '필터 먼지 청소 & 송풍구 세척',
+            'cycle_days' => 30, 'last_maintained_date' => date('Y-m-d', strtotime('-25 days')),
+            'next_due_date' => date('Y-m-d', strtotime('+5 days')), 'cost_estimate' => 0,
+            'manager_note' => '매월 1일 마감 후 필터 세척'
+        ]
+    ];
+}
+
+require_once 'header.php';
+?>
+
+<style>
+    .equip-title-responsive { font-size: clamp(1.15rem, 1.8vw, 1.75rem) !important; font-weight: 800 !important; color: #0f172a; }
+    .equip-scroll-wrapper { width: 100%; overflow-x: auto !important; -webkit-overflow-scrolling: touch; padding-bottom: 6px; }
+    .equip-detail-table { min-width: 860px !important; width: 100% !important; }
+    .equip-detail-table th, .equip-detail-table td { white-space: nowrap !important; vertical-align: middle !important; padding: 0.85rem 0.95rem !important; }
+</style>
+
+<div class="row mb-4 align-items-center">
+    <div class="col-md-7">
+        <h3 class="fw-bold mb-1 equip-title-responsive">
+            <i class="fa-solid fa-screwdriver-wrench text-primary me-2"></i>주방 설비·냉난방기 정기 유지보수 플래너
+        </h3>
+        <p class="text-muted mb-0 small">
+            제빙기 필터, 에어컨 분해세척, 튀김기 오일 교체 주기를 추적하여 돌발 수리비 지출을 방지합니다.
+        </p>
+    </div>
+    <div class="col-md-5 text-md-end mt-3 mt-md-0">
+        <?php if ($user_role !== 'USER'): ?>
+            <button type="button" class="btn btn-primary rounded-pill px-3 py-2 fw-semibold small shadow-sm" data-bs-toggle="modal" data-bs-target="#addEquipModal">
+                <i class="fa-solid fa-plus me-1"></i>설비 유지보수 등록
+            </button>
+        <?php else: ?>
+            <span class="badge bg-light text-secondary border px-3 py-2 rounded-pill small">일반회원 (읽기 전용)</span>
+        <?php endif; ?>
+    </div>
+</div>
+
+<?php if ($flash_msg): ?>
+    <div class="alert alert-success alert-dismissible fade show rounded-3 mb-4 shadow-sm small" role="alert">
+        <i class="fa-solid fa-circle-check me-2 text-success"></i><?= htmlspecialchars($flash_msg) ?>
+        <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+    </div>
+<?php endif; ?>
+
+<?php if ($flash_err): ?>
+    <div class="alert alert-danger alert-dismissible fade show rounded-3 mb-4 shadow-sm small" role="alert">
+        <i class="fa-solid fa-triangle-exclamation me-2 text-danger"></i><?= htmlspecialchars($flash_err) ?>
+        <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+    </div>
+<?php endif; ?>
+
+<div class="row g-3 mb-4">
+    <div class="col-md-4">
+        <div class="glass-card p-3 border-start border-4 border-info h-100">
+            <div class="text-muted small fw-bold mb-1">제빙기 위생 점검 기준</div>
+            <div class="fs-4 fw-bold text-dark">필터 3개월 주기 권장</div>
+            <small class="text-secondary">식약처 얼음 식중독균 불시 수거검사 과태료 예방</small>
+        </div>
+    </div>
+    <div class="col-md-4">
+        <div class="glass-card p-3 border-start border-4 border-warning h-100">
+            <div class="text-muted small fw-bold mb-1">에어컨 필터 세척 시 절감</div>
+            <div class="fs-4 fw-bold text-warning-emphasis">전기요금 5~12% 절감</div>
+            <small class="text-secondary">열교환기 냉방 효율 저하 및 콤프레셔 고장 방지</small>
+        </div>
+    </div>
+    <div class="col-md-4">
+        <div class="glass-card p-3 border-start border-4 border-success h-100">
+            <div class="text-muted small fw-bold mb-1">장비 내용연수 연장 효과</div>
+            <div class="fs-4 fw-bold text-success">교체주기 2~3년 연장</div>
+            <small class="text-secondary">정기 윤활/소독 시 감가상각비 보전</small>
+        </div>
+    </div>
+</div>
+
+<div class="row mb-4">
+    <div class="col-12">
+        <div class="glass-card p-4">
+            <h5 class="fw-bold mb-3 text-dark"><i class="fa-solid fa-list-check me-2 text-primary"></i>등록 설비별 점검 D-Day 스케줄</h5>
+            <div class="equip-scroll-wrapper">
+                <table class="table table-hover align-middle equip-detail-table mb-0">
+                    <thead class="table-light">
+                        <tr>
+                            <th>설비/기기명</th>
+                            <th>점검 항목</th>
+                            <th class="text-center">점검 주기</th>
+                            <th>최근 점검일</th>
+                            <th class="text-center">차기 점검 D-Day</th>
+                            <th class="text-end">예상 비용</th>
+                            <th>관리 메모/업체</th>
+                            <th class="text-center">점검 완료</th>
+                            <th class="text-center">삭제</th>
+                        </tr>
+                    </thead>
+                    <tbody class="small">
+                        <?php foreach ($records as $r): ?>
+                            <?php
+                                $d_diff = intval((strtotime($r['next_due_date']) - time()) / 86400);
+                                $is_urgent = ($d_diff <= 7);
+                            ?>
+                            <tr>
+                                <td class="fw-bold text-dark"><?= htmlspecialchars($r['equipment_name']) ?></td>
+                                <td><span class="badge bg-light text-dark border"><?= htmlspecialchars($r['maintenance_type']) ?></span></td>
+                                <td class="text-center"><?= $r['cycle_days'] ?>일마다</td>
+                                <td class="text-muted"><?= htmlspecialchars($r['last_maintained_date']) ?></td>
+                                <td class="text-center">
+                                    <?php if ($d_diff < 0): ?>
+                                        <span class="badge bg-danger px-2 py-1">기한 경과 (점검필요)</span>
+                                    <?php elseif ($is_urgent): ?>
+                                        <span class="badge bg-warning text-dark px-3 py-1 fw-bold">D-<?= $d_diff ?>일 (임박)</span>
+                                    <?php else: ?>
+                                        <span class="badge bg-success-subtle text-success border">D-<?= $d_diff ?>일</span>
+                                    <?php endif; ?>
+                                </td>
+                                <td class="text-end fw-bold text-primary"><?= number_format($r['cost_estimate']) ?>원</td>
+                                <td class="text-secondary"><?= htmlspecialchars($r['manager_note'] ?? '-') ?></td>
+                                <td class="text-center">
+                                    <?php if ($user_role !== 'USER' && !empty($r['id'])): ?>
+                                        <form method="POST" action="equipment_maintenance.htm" class="d-inline">
+                                            <input type="hidden" name="action" value="complete_maintenance">
+                                            <input type="hidden" name="record_id" value="<?= (int)$r['id'] ?>">
+                                            <input type="hidden" name="cycle_days" value="<?= (int)$r['cycle_days'] ?>">
+                                            <button type="submit" class="btn btn-sm btn-outline-success rounded-pill px-3 fw-semibold">오늘 완료</button>
+                                        </form>
+                                    <?php else: ?>
+                                        <span class="text-muted">-</span>
+                                    <?php endif; ?>
+                                </td>
+                                <td class="text-center">
+                                    <?php if ($user_role !== 'USER' && !empty($r['id'])): ?>
+                                        <form method="POST" action="equipment_maintenance.htm" class="d-inline" onsubmit="return confirm('이 항목을 삭제하시겠습니까?');">
+                                            <input type="hidden" name="action" value="delete_record">
+                                            <input type="hidden" name="record_id" value="<?= (int)$r['id'] ?>">
+                                            <button type="submit" class="btn btn-outline-danger btn-sm rounded-pill px-2 py-0"><i class="fa-solid fa-trash-can"></i></button>
+                                        </form>
+                                    <?php else: ?>
+                                        <span class="text-muted">-</span>
+                                    <?php endif; ?>
+                                </td>
+                            </tr>
+                        <?php endforeach; ?>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+</div>
+
+<?php if ($user_role !== 'USER'): ?>
+<div class="modal fade" id="addEquipModal" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered modal-lg">
+        <div class="modal-content border-0 shadow-lg rounded-4 overflow-hidden">
+            <form method="POST" action="equipment_maintenance.htm">
+                <input type="hidden" name="action" value="add_equipment">
+                <div class="modal-header bg-primary text-white py-3 px-4">
+                    <h5 class="modal-title fs-6 fw-bold text-white"><i class="fa-solid fa-wrench me-2"></i>설비 유지보수 항목 등록</h5>
+                    <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body p-4">
+                    <div class="mb-3">
+                        <label class="form-label fw-bold small text-dark">설비/기기명</label>
+                        <input type="text" name="equipment_name" class="form-control" placeholder="예: 업소용 제빙기" required>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label fw-bold small text-dark">점검 항목</label>
+                        <input type="text" name="maintenance_type" class="form-control" placeholder="예: 정수 필터 교체 및 노즐 소독" required>
+                    </div>
+                    <div class="row">
+                        <div class="col-md-6 mb-3">
+                            <label class="form-label fw-bold small text-dark">점검 주기 (일)</label>
+                            <input type="number" name="cycle_days" class="form-control" value="90" required>
+                        </div>
+                        <div class="col-md-6 mb-3">
+                            <label class="form-label fw-bold small text-dark">최근 점검일</label>
+                            <input type="date" name="last_maintained_date" class="form-control" value="<?= date('Y-m-d') ?>" required>
+                        </div>
+                    </div>
+                    <div class="row">
+                        <div class="col-md-6 mb-3">
+                            <label class="form-label fw-bold small text-dark">예상 비용 (원)</label>
+                            <input type="number" name="cost_estimate" class="form-control" value="50000">
+                        </div>
+                        <div class="col-md-6 mb-3">
+                            <label class="form-label fw-bold small text-dark">관리 메모/연락처</label>
+                            <input type="text" name="manager_note" class="form-control" placeholder="예: AS센터 1588-XXXX">
+                        </div>
+                    </div>
+                </div>
+                <div class="modal-footer bg-light py-2 px-3 border-top">
+                    <button type="button" class="btn btn-secondary btn-sm rounded-pill px-3" data-bs-dismiss="modal">취소</button>
+                    <button type="submit" class="btn btn-primary btn-sm rounded-pill px-4 fw-bold">등록하기</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+<?php endif; ?>
+
+<?php
+include_once 'footer.php';
+?>
+</body>
+</html>

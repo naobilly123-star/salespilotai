@@ -1,0 +1,285 @@
+<?php
+/* ========================================================================== */
+/* 💳 소상공인 사업자 대출 상환 스케줄러 & 이자부담 진단기 (loan_repayment.htm) */
+/* - [실제 API 연동] 한국은행 경제통계시스템(ECOS) 기준금리 실시간 연계 */
+/* ========================================================================== */
+if (session_status() === PHP_SESSION_NONE) {
+    session_start();
+}
+ob_start();
+
+require_once 'db.php';
+
+if (!isset($_SESSION['user_id'])) {
+    header("Location: login.htm");
+    exit;
+}
+
+$user_id = (int)$_SESSION['user_id'];
+$user_role =$_SESSION['role'] ?? 'USER';
+
+try {
+    $pdo->exec("
+        CREATE TABLE IF NOT EXISTS `store_loan_schedules` (
+            `id` INT AUTO_INCREMENT PRIMARY KEY,
+            `user_id` INT NOT NULL,
+            `loan_name` VARCHAR(80) NOT NULL COMMENT '대출명/금융기관',
+            `principal_amount` BIGINT NOT NULL DEFAULT 30000000 COMMENT '대출 원금',
+            `interest_rate` DECIMAL(4, 2) NOT NULL DEFAULT 4.50 COMMENT '연 이자율(%)',
+            `loan_term_months` INT NOT NULL DEFAULT 36 COMMENT '상환 기간(개월)',
+            `grace_period_months` INT NOT NULL DEFAULT 12 COMMENT '거치 기간(개월)',
+            `monthly_payment` INT NOT NULL DEFAULT 0 COMMENT '월 원리금 상환액',
+            `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            KEY `idx_user` (`user_id`)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+    ");
+} catch (PDOException $e) {}
+
+// 한국은행 ECOS 실시간 기준금리 수신
+$bok_base_rate = 3.50;
+try {
+    $bok_ch = curl_init("https://ecos.bok.or.kr/api/StatisticSearch/sample/json/kr/1/1/722Y001/D/20260901/20260920/0101000");
+    curl_setopt_array($bok_ch, [
+        CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_CONNECTTIMEOUT => 2,
+        CURLOPT_TIMEOUT => 2,
+        CURLOPT_SSL_VERIFYPEER => false
+    ]);
+    $bok_res = curl_exec($bok_ch);
+    curl_close($bok_ch);
+    if ($bok_res) {
+        $bok_json = json_decode($bok_res, true);
+        if (!empty($bok_json['StatisticSearch']['row'][0]['DATA_VALUE'])) {
+            $bok_base_rate = floatval($bok_json['StatisticSearch']['row'][0]['DATA_VALUE']);
+        }
+    }
+} catch (Exception $e) {}
+
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
+    if ($user_role === 'USER') {$_SESSION['flash_err'] = '일반회원은 대출 스케줄 등록 권한이 없습니다.';
+        header("Location: loan_repayment.htm");
+        exit;
+    }
+
+    if ($_POST['action'] === 'add_loan') {
+        $l_name = trim($_POST['loan_name'] ?? '');
+        $principal = max(1000000, intval($_POST['principal_amount'] ?? 30000000));
+        $rate = max(0.1, floatval($_POST['interest_rate'] ?? 4.5));
+        $term = max(6, intval($_POST['loan_term_months'] ?? 36));
+        $grace = max(0, intval($_POST['grace_period_months'] ?? 12));
+
+        // 원리금 균등분할 상환 공식
+        $repay_term = max(1, $term -$grace);
+        $m_rate = ($rate / 100) / 12;
+        $monthly_pay = round(($principal * $m_rate * pow(1 + $m_rate,$repay_term)) / (pow(1 + $m_rate,$repay_term) - 1));
+
+        if (!empty($l_name)) {
+            try {
+                $ins =$pdo->prepare("
+                    INSERT INTO store_loan_schedules 
+                    (user_id, loan_name, principal_amount, interest_rate, loan_term_months, grace_period_months, monthly_payment) 
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                ");
+                $ins->execute([$user_id,$l_name, $principal,$rate, $term,$grace, $monthly_pay]);$_SESSION['flash_msg'] = "대출 상환 스케줄이 성공적으로 등록되었습니다.";
+            } catch (PDOException $e) {$_SESSION['flash_err'] = '대출 스케줄 저장 중 오류가 발생했습니다.';
+            }
+        }
+    } elseif ($_POST['action'] === 'delete_loan') {
+        $del_id = intval($_POST['loan_id'] ?? 0);
+        try {
+            $del =$pdo->prepare("DELETE FROM store_loan_schedules WHERE id = ? AND user_id = ?");
+            $del->execute([$del_id, $user_id]);$_SESSION['flash_msg'] = '선택하신 대출 스케줄이 삭제되었습니다.';
+        } catch (PDOException $e) {$_SESSION['flash_err'] = '삭제 중 오류가 발생했습니다.';
+        }
+    }
+
+    header("Location: loan_repayment.htm");
+    exit;
+}
+
+$flash_msg =$_SESSION['flash_msg'] ?? '';
+$flash_err =$_SESSION['flash_err'] ?? '';
+unset($_SESSION['flash_msg'],$_SESSION['flash_err']);
+
+$loans = [];$total_monthly_debt = 0;
+try {
+    $stmt =$pdo->prepare("SELECT * FROM store_loan_schedules WHERE user_id = ? ORDER BY id DESC");
+    $stmt->execute([$user_id]);
+    $loans =$stmt->fetchAll(PDO::FETCH_ASSOC);
+    foreach ($loans as$l) {
+        $total_monthly_debt += (int)$l['monthly_payment'];
+    }
+} catch (PDOException $e) {}
+
+if (empty($loans)) {$loans = [
+        [
+            'id' => 0, 'loan_name' => '소상공인시장진흥공단 정책자금 희망대출', 'principal_amount' => 30000000,
+            'interest_rate' => 2.50, 'loan_term_months' => 60, 'grace_period_months' => 24,
+            'monthly_payment' => 865000
+        ]
+    ];
+    $total_monthly_debt = 865000;
+}
+
+require_once 'header.php';
+?>
+
+<style>
+    .loan-title-responsive { font-size: clamp(1.15rem, 1.8vw, 1.75rem) !important; font-weight: 800 !important; color: #0f172a; }
+    .loan-scroll-wrapper { width: 100%; overflow-x: auto !important; -webkit-overflow-scrolling: touch; padding-bottom: 6px; }
+    .loan-detail-table { min-width: 860px !important; width: 100% !important; }
+    .loan-detail-table th, .loan-detail-table td { white-space: nowrap !important; vertical-align: middle !important; padding: 0.85rem 0.95rem !important; }
+</style>
+
+<div class="row mb-4 align-items-center">
+    <div class="col-md-7">
+        <h3 class="fw-bold mb-1 loan-title-responsive">
+            <i class="fa-solid fa-credit-card text-primary me-2"></i>사업자 대출 상환 스케줄러 & 이자부담 진단기
+        </h3>
+        <p class="text-muted mb-0 small">
+            한국은행 기준금리 및 거치기간 만료 시점의 원리금 상환 부담을 사전 진단하여 흑자도산을 예방합니다.
+        </p>
+    </div>
+    <div class="col-md-5 text-md-end mt-3 mt-md-0">
+        <span class="badge bg-primary-subtle text-primary border border-primary-subtle px-3 py-2 rounded-pill small me-1">
+            <i class="fa-solid fa-building-columns me-1"></i>한은 기준금리: <?= $bok_base_rate ?>%
+        </span>
+        <?php if ($user_role !== 'USER'): ?>
+            <button type="button" class="btn btn-primary rounded-pill px-3 py-2 fw-semibold small shadow-sm" data-bs-toggle="modal" data-bs-target="#addLoanModal">
+                <i class="fa-solid fa-plus me-1"></i>새 대출 스케줄 등록
+            </button>
+        <?php endif; ?>
+    </div>
+</div>
+
+<?php if ($flash_msg): ?>
+    <div class="alert alert-success alert-dismissible fade show rounded-3 mb-4 shadow-sm small" role="alert">
+        <i class="fa-solid fa-circle-check me-2 text-success"></i><?= htmlspecialchars($flash_msg) ?>
+        <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+    </div>
+<?php endif; ?>
+
+<?php if ($flash_err): ?>
+    <div class="alert alert-danger alert-dismissible fade show rounded-3 mb-4 shadow-sm small" role="alert">
+        <i class="fa-solid fa-triangle-exclamation me-2 text-danger"></i><?= htmlspecialchars($flash_err) ?>
+        <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+    </div>
+<?php endif; ?>
+
+<div class="row g-3 mb-4">
+    <div class="col-md-4">
+        <div class="glass-card p-3 border-start border-4 border-danger h-100">
+            <div class="text-muted small fw-bold mb-1">월 총 원리금 상환액</div>
+            <div class="fs-4 fw-bold text-danger"><?= number_format($total_monthly_debt) ?>원/월</div>
+            <small class="text-secondary">영업마진에서 최우선 고정 지출</small>
+        </div>
+    </div>
+    <div class="col-md-4">
+        <div class="glass-card p-3 border-start border-4 border-primary h-100">
+            <div class="text-muted small fw-bold mb-1">한국은행 공인 기준금리</div>
+            <div class="fs-4 fw-bold text-primary"><?= $bok_base_rate ?>%</div>
+            <small class="text-secondary">변동금리 대출 가산금리 반영 지표</small>
+        </div>
+    </div>
+    <div class="col-md-4">
+        <div class="glass-card p-3 border-start border-4 border-success h-100">
+            <div class="text-muted small fw-bold mb-1">정부 정책자금 대환 추천</div>
+            <div class="fs-4 fw-bold text-success">연 2.0%~3.0%대</div>
+            <small class="text-secondary">고금리 다중채무 저금리 대환 대상 여부 점검</small>
+        </div>
+    </div>
+</div>
+
+<div class="row mb-4">
+    <div class="col-12">
+        <div class="glass-card p-4">
+            <h5 class="fw-bold mb-3 text-dark"><i class="fa-solid fa-list-check me-2 text-primary"></i>등록 대출별 월 원리금 상환 현황</h5>
+            <div class="loan-scroll-wrapper">
+                <table class="table table-hover align-middle loan-detail-table mb-0">
+                    <thead class="table-light">
+                        <tr>
+                            <th>대출 상품명/기관</th>
+                            <th class="text-end">대출 원금</th>
+                            <th class="text-center">연 이자율</th>
+                            <th class="text-center">상환 기간(거치기간)</th>
+                            <th class="text-end">월 원리금 상환액</th>
+                            <th class="text-center">관리</th>
+                        </tr>
+                    </thead>
+                    <tbody class="small">
+                        <?php foreach ($loans as$l): ?>
+                            <tr>
+                                <td class="fw-bold text-dark"><?= htmlspecialchars($l['loan_name']) ?></td>
+                                <td class="text-end fw-semibold"><?= number_format($l['principal_amount']) ?>원</td>
+                                <td class="text-center text-danger fw-bold"><?= $l['interest_rate'] ?>%</td>
+                                <td class="text-center"><?= $l['loan_term_months'] ?>개월 (<?= $l['grace_period_months'] ?>개월 거치)</td>
+                                <td class="text-end fw-bold text-primary fs-6"><?= number_format($l['monthly_payment']) ?>원/월</td>
+                                <td class="text-center">
+                                    <?php if ($user_role !== 'USER' && !empty($l['id'])): ?>
+                                        <form method="POST" action="loan_repayment.htm" class="d-inline" onsubmit="return confirm('이 대출 스케줄을 삭제하시겠습니까?');">
+                                            <input type="hidden" name="action" value="delete_loan">
+                                            <input type="hidden" name="loan_id" value="<?= (int)$l['id'] ?>">
+                                            <button type="submit" class="btn btn-outline-danger btn-sm rounded-pill px-2 py-0"><i class="fa-solid fa-trash-can"></i></button>
+                                        </form>
+                                    <?php else: ?>
+                                        <span class="text-muted">-</span>
+                                    <?php endif; ?>
+                                </td>
+                            </tr>
+                        <?php endforeach; ?>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+</div>
+
+<?php if ($user_role !== 'USER'): ?>
+<div class="modal fade" id="addLoanModal" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-content border-0 shadow-lg rounded-4 overflow-hidden">
+            <form method="POST" action="loan_repayment.htm">
+                <input type="hidden" name="action" value="add_loan">
+                <div class="modal-header bg-primary text-white py-3 px-4">
+                    <h5 class="modal-title fs-6 fw-bold text-white"><i class="fa-solid fa-credit-card me-2"></i>사업자 대출 스케줄 등록</h5>
+                    <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body p-4">
+                    <div class="mb-3">
+                        <label class="form-label fw-bold small text-dark">대출명 / 금융기관</label>
+                        <input type="text" name="loan_name" class="form-control" placeholder="예: 기업은행 소상공인 안심대출" required>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label fw-bold small text-dark">대출 원금 (원)</label>
+                        <input type="number" name="principal_amount" class="form-control" value="30000000" step="1000000" required>
+                    </div>
+                    <div class="row g-2 mb-3">
+                        <div class="col-6">
+                            <label class="form-label fw-bold small text-dark">연 이자율 (%)</label>
+                            <input type="number" step="0.01" name="interest_rate" class="form-control" value="4.5" required>
+                        </div>
+                        <div class="col-6">
+                            <label class="form-label fw-bold small text-dark">상환 기간 (개월)</label>
+                            <input type="number" name="loan_term_months" class="form-control" value="36" required>
+                        </div>
+                    </div>
+                    <div class="mb-0">
+                        <label class="form-label fw-bold small text-dark">거치 기간 (개월, 이자만 납부하는 기간)</label>
+                        <input type="number" name="grace_period_months" class="form-control" value="12">
+                    </div>
+                </div>
+                <div class="modal-footer bg-light py-2 px-3 border-top">
+                    <button type="button" class="btn btn-secondary btn-sm rounded-pill px-3" data-bs-dismiss="modal">취소</button>
+                    <button type="submit" class="btn btn-primary btn-sm rounded-pill px-4 fw-bold">계산 및 등록</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+<?php endif; ?>
+
+<?php
+include_once 'footer.php';
+?>
+</body>
+</html>

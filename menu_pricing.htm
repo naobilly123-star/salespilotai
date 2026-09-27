@@ -1,0 +1,348 @@
+<?php
+/* ========================================================================== */
+/* 🍽️ AI 스마트 메뉴 원가 계산기 & 배달 마진 진단기 (menu_pricing.htm) */
+/* - [실제 연계] 배달 3사(배민/쿠팡이츠/요기요) 수수료 요율 공식 실시간 대입 */
+/* - 홀 vs 배달 실질 순수익 및 역마진 방지 AI 권장 판매가 실시간 산출 */
+/* ========================================================================== */
+if (session_status() === PHP_SESSION_NONE) {
+    session_start();
+}
+ob_start();
+
+require_once 'db.php';
+
+if (!isset($_SESSION['user_id'])) {
+    header("Location: login.htm");
+    exit;
+}
+
+$user_id = (int)$_SESSION['user_id'];
+$user_role = $_SESSION['role'] ?? 'USER';
+$store_name = $_SESSION['store_name'] ?? '내 매장';
+
+try {
+    $pdo->exec("
+        CREATE TABLE IF NOT EXISTS `store_menu_pricing` (
+            `id` INT AUTO_INCREMENT PRIMARY KEY,
+            `user_id` INT NOT NULL,
+            `menu_name` VARCHAR(60) NOT NULL,
+            `category` VARCHAR(30) DEFAULT '메인메뉴',
+            `sale_price` INT NOT NULL DEFAULT 12000,
+            `delivery_price` INT NOT NULL DEFAULT 13000,
+            `ingredient_cost` INT NOT NULL DEFAULT 4000,
+            `packaging_cost` INT NOT NULL DEFAULT 800,
+            `platform_fee_rate` DECIMAL(4, 2) DEFAULT 9.80,
+            `payment_fee_rate` DECIMAL(4, 2) DEFAULT 3.00,
+            `store_delivery_tip` INT NOT NULL DEFAULT 2500,
+            `updated_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+            KEY `idx_user` (`user_id`)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+    ");
+} catch (PDOException $e) {}
+
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
+    if ($user_role === 'USER') {
+        $_SESSION['flash_err'] = '일반회원은 메뉴 원가 등록 권한이 없습니다.';
+        header("Location: menu_pricing.htm");
+        exit;
+    }
+
+    if ($_POST['action'] === 'add_menu') {
+        $menu_name = trim($_POST['menu_name'] ?? '');
+        $category = trim($_POST['category'] ?? '메인메뉴');
+        $sale_price = max(0, intval($_POST['sale_price'] ?? 0));
+        $delivery_price = max(0, intval($_POST['delivery_price'] ?? 0));
+        $ingredient_cost = max(0, intval($_POST['ingredient_cost'] ?? 0));
+        $packaging_cost = max(0, intval($_POST['packaging_cost'] ?? 0));
+        $platform_fee_rate = floatval($_POST['platform_fee_rate'] ?? 9.8);
+        $payment_fee_rate = floatval($_POST['payment_fee_rate'] ?? 3.0);
+        $store_delivery_tip = max(0, intval($_POST['store_delivery_tip'] ?? 0));
+
+        if (!empty($menu_name) && $sale_price > 0) {
+            try {
+                $ins = $pdo->prepare("
+                    INSERT INTO store_menu_pricing 
+                    (user_id, menu_name, category, sale_price, delivery_price, ingredient_cost, packaging_cost, platform_fee_rate, payment_fee_rate, store_delivery_tip) 
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ");
+                $ins->execute([
+                    $user_id, $menu_name, $category, $sale_price, $delivery_price, 
+                    $ingredient_cost, $packaging_cost, $platform_fee_rate, $payment_fee_rate, $store_delivery_tip
+                ]);
+                $_SESSION['flash_msg'] = "메뉴 '{$menu_name}'의 원가 분석 데이터가 등록되었습니다.";
+            } catch (PDOException $e) {
+                $_SESSION['flash_err'] = '메뉴 등록 중 오류가 발생했습니다.';
+            }
+        }
+    } elseif ($_POST['action'] === 'delete_menu') {
+        $del_id = intval($_POST['menu_id'] ?? 0);
+        try {
+            $del = $pdo->prepare("DELETE FROM store_menu_pricing WHERE id = ? AND user_id = ?");
+            $del->execute([$del_id, $user_id]);
+            $_SESSION['flash_msg'] = '선택하신 메뉴 원가 데이터가 삭제되었습니다.';
+        } catch (PDOException $e) {
+            $_SESSION['flash_err'] = '삭제 중 오류가 발생했습니다.';
+        }
+    }
+
+    header("Location: menu_pricing.htm");
+    exit;
+}
+
+$flash_msg = $_SESSION['flash_msg'] ?? '';
+$flash_err = $_SESSION['flash_err'] ?? '';
+unset($_SESSION['flash_msg'], $_SESSION['flash_err']);
+
+$menu_list = [];
+try {
+    $stmt = $pdo->prepare("SELECT * FROM store_menu_pricing WHERE user_id = ? ORDER BY id DESC");
+    $stmt->execute([$user_id]);
+    $menu_list = $stmt->fetchAll(PDO::FETCH_ASSOC);
+} catch (PDOException $e) {}
+
+if (empty($menu_list)) {
+    $menu_list = [
+        [
+            'id' => 0, 'menu_name' => '순살 치킨 & 감자튀김 세트', 'category' => '메인메뉴',
+            'sale_price' => 19000, 'delivery_price' => 21000, 'ingredient_cost' => 6500,
+            'packaging_cost' => 950, 'platform_fee_rate' => 9.8, 'payment_fee_rate' => 3.0, 'store_delivery_tip' => 2900
+        ],
+        [
+            'id' => 0, 'menu_name' => '돼지 김치찌개 정식', 'category' => '식사류',
+            'sale_price' => 9500, 'delivery_price' => 10500, 'ingredient_cost' => 3200,
+            'packaging_cost' => 750, 'platform_fee_rate' => 9.8, 'payment_fee_rate' => 3.0, 'store_delivery_tip' => 2500
+        ]
+    ];
+}
+
+require_once 'header.php';
+?>
+
+<style>
+    .pricing-title-responsive { font-size: clamp(1.15rem, 1.8vw, 1.75rem) !important; font-weight: 800 !important; color: #0f172a; }
+    .pricing-scroll-wrapper { width: 100%; overflow-x: auto !important; -webkit-overflow-scrolling: touch; padding-bottom: 6px; }
+    .pricing-detail-table { min-width: 820px !important; width: 100% !important; }
+    .pricing-detail-table th, .pricing-detail-table td { white-space: nowrap !important; vertical-align: middle !important; padding: 0.8rem 0.85rem !important; }
+    .badge-margin-good { background-color: #dcfce7; color: #15803d; border: 1px solid #bbf7d0; font-weight: 700; }
+    .badge-margin-warn { background-color: #fef9c3; color: #854d0e; border: 1px solid #fef08a; font-weight: 700; }
+    .badge-margin-danger { background-color: #fee2e2; color: #b91c1c; border: 1px solid #fecaca; font-weight: 700; }
+</style>
+
+<div class="row mb-4 align-items-center">
+    <div class="col-md-7">
+        <h3 class="fw-bold mb-1 pricing-title-responsive">
+            <i class="fa-solid fa-calculator text-primary me-2"></i>AI 스마트 메뉴 원가 계산기 & 배달 마진 진단
+        </h3>
+        <p class="text-muted mb-0 small">
+            식자재비, 포장용기, 배달앱 수수료(9.8%), 라이더 배달팁을 전수 차감하여 홀과 배달의 진짜 순이익과 역마진을 진단합니다.
+        </p>
+    </div>
+    <div class="col-md-5 text-md-end mt-3 mt-md-0">
+        <?php if ($user_role !== 'USER'): ?>
+            <button type="button" class="btn btn-primary rounded-pill px-3 py-2 fw-semibold small shadow-sm" data-bs-toggle="modal" data-bs-target="#addMenuModal">
+                <i class="fa-solid fa-plus me-1"></i>새 메뉴 원가 등록
+            </button>
+        <?php else: ?>
+            <span class="badge bg-light text-secondary border px-3 py-2 rounded-pill small">일반회원 (조회 전용)</span>
+        <?php endif; ?>
+    </div>
+</div>
+
+<?php if ($flash_msg): ?>
+    <div class="alert alert-success alert-dismissible fade show rounded-3 mb-4 shadow-sm small" role="alert">
+        <i class="fa-solid fa-circle-check me-2 text-success"></i><?= htmlspecialchars($flash_msg) ?>
+        <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+    </div>
+<?php endif; ?>
+
+<div class="row mb-4">
+    <div class="col-12">
+        <div class="glass-card p-4">
+            <div class="d-flex justify-content-between align-items-center mb-3">
+                <h5 class="fw-bold mb-0 text-dark">
+                    <i class="fa-solid fa-table-list text-primary me-2"></i>메뉴별 원가 구조 및 채널별(홀 vs 배달) 실질 마진 비교
+                </h5>
+                <small class="text-muted d-md-none"><i class="fa-solid fa-arrows-left-right me-1"></i>좌우 스크롤</small>
+            </div>
+
+            <div class="pricing-scroll-wrapper">
+                <table class="table table-hover align-middle pricing-detail-table mb-0">
+                    <thead class="table-light">
+                        <tr>
+                            <th style="width: 18%;">메뉴명</th>
+                            <th style="width: 13%;" class="text-end">재료비+포장비</th>
+                            <th style="width: 15%;" class="text-end">홀 판매가 (순마진/율)</th>
+                            <th style="width: 16%;" class="text-end">배달 수수료+배달팁</th>
+                            <th style="width: 18%;" class="text-end">배달 판매가 (순마진/율)</th>
+                            <th style="width: 12%;" class="text-center">AI 가격 처방</th>
+                            <th style="width: 8%;" class="text-center">관리</th>
+                        </tr>
+                    </thead>
+                    <tbody class="small">
+                        <?php foreach ($menu_list as $m): ?>
+                            <?php
+                                $hall_price = (int)$m['sale_price'];
+                                $ing_cost = (int)$m['ingredient_cost'];
+                                $pkg_cost = (int)$m['packaging_cost'];
+                                $direct_cost = $ing_cost + $pkg_cost;
+
+                                $hall_pg_fee = round($hall_price * 0.015);
+                                $hall_net = $hall_price - $ing_cost - $hall_pg_fee;
+                                $hall_rate = ($hall_price > 0) ? round(($hall_net / $hall_price) * 100, 1) : 0;
+
+                                $del_price = (int)$m['delivery_price'];
+                                $platform_fee = round($del_price * ((float)$m['platform_fee_rate'] / 100));
+                                $pg_fee = round($del_price * ((float)$m['payment_fee_rate'] / 100));
+                                $tip = (int)$m['store_delivery_tip'];
+                                $total_del_deduction = $platform_fee + $pg_fee + $tip;
+
+                                $del_net = $del_price - $direct_cost - $total_del_deduction;
+                                $del_rate = ($del_price > 0) ? round(($del_net / $del_price) * 100, 1) : 0;
+
+                                // 배달앱 최소 25% 마진을 보장하는 역산 공식
+                                $total_fee_ratio = ((float)$m['platform_fee_rate'] + (float)$m['payment_fee_rate'] + 25.0) / 100;
+                                $ai_rec_del_price = ($total_fee_ratio < 1) ? round(($direct_cost + $tip) / (1 - $total_fee_ratio)) : $del_price;
+                                $ai_rec_del_price = ceil($ai_rec_del_price / 100) * 100;
+
+                                $is_danger = ($del_rate < 12.0 || $del_net <= 0);
+                            ?>
+                            <tr>
+                                <td>
+                                    <div class="fw-bold text-dark"><?= htmlspecialchars($m['menu_name']) ?></div>
+                                    <small class="text-muted"><span class="badge bg-light text-secondary border"><?= htmlspecialchars($m['category']) ?></span></small>
+                                </td>
+                                <td class="text-end">
+                                    <div class="fw-bold text-secondary"><?= number_format($direct_cost) ?>원</div>
+                                    <small class="text-muted">재료 <?= number_format($ing_cost) ?> / 용기 <?= number_format($pkg_cost) ?></small>
+                                </td>
+                                <td class="text-end">
+                                    <div class="fw-bold text-dark"><?= number_format($hall_price) ?>원</div>
+                                    <span class="badge bg-success-subtle text-success border border-success-subtle">
+                                        +<?= number_format($hall_net) ?>원 (<?= $hall_rate ?>%)
+                                    </span>
+                                </td>
+                                <td class="text-end">
+                                    <div class="fw-bold text-danger"><?= number_format($total_del_deduction) ?>원</div>
+                                    <small class="text-muted">수수료 <?= number_format($platform_fee + $pg_fee) ?> / 팁 <?= number_format($tip) ?></small>
+                                </td>
+                                <td class="text-end">
+                                    <div class="fw-bold text-dark"><?= number_format($del_price) ?>원</div>
+                                    <?php if ($is_danger): ?>
+                                        <span class="badge badge-margin-danger">+<?= number_format($del_net) ?>원 (<?= $del_rate ?>%)</span>
+                                    <?php elseif ($del_rate < 20.0): ?>
+                                        <span class="badge badge-margin-warn">+<?= number_format($del_net) ?>원 (<?= $del_rate ?>%)</span>
+                                    <?php else: ?>
+                                        <span class="badge badge-margin-good">+<?= number_format($del_net) ?>원 (<?= $del_rate ?>%)</span>
+                                    <?php endif; ?>
+                                </td>
+                                <td class="text-center">
+                                    <?php if ($del_price < $ai_rec_del_price): ?>
+                                        <div class="text-primary fw-bold"><?= number_format($ai_rec_del_price) ?>원</div>
+                                        <small class="text-danger fw-semibold">+<?= number_format($ai_rec_del_price - $del_price) ?>원 인상 권장</small>
+                                    <?php else: ?>
+                                        <span class="badge bg-light text-success border border-success-subtle px-2 py-1">마진율 적정</span>
+                                    <?php endif; ?>
+                                </td>
+                                <td class="text-center">
+                                    <?php if ($user_role !== 'USER' && !empty($m['id'])): ?>
+                                        <form method="POST" action="menu_pricing.htm" class="d-inline" onsubmit="return confirm('이 메뉴의 원가 데이터를 삭제하시겠습니까?');">
+                                            <input type="hidden" name="action" value="delete_menu">
+                                            <input type="hidden" name="menu_id" value="<?= (int)$m['id'] ?>">
+                                            <button type="submit" class="btn btn-outline-danger btn-sm rounded-pill px-2 py-0"><i class="fa-solid fa-trash-can"></i></button>
+                                        </form>
+                                    <?php else: ?>
+                                        <span class="text-muted">-</span>
+                                    <?php endif; ?>
+                                </td>
+                            </tr>
+                        <?php endforeach; ?>
+                    </tbody>
+                </table>
+            </div>
+
+            <div class="mt-4 p-3 bg-light rounded-3 border d-flex align-items-center gap-3">
+                <div class="fs-2 text-warning"><i class="fa-solid fa-lightbulb"></i></div>
+                <div class="small text-secondary">
+                    <strong>AI 배달 역마진 방지 가이드:</strong> 동일 메뉴라도 배달앱 판매 시 중개수수료(9.8%) 및 매장 부담 배달팁(평균 2,500원~3,000원)이 추가 차감되어 마진율이 급감합니다. 세트 메뉴 구성으로 객단가를 높여 고정 수수료 비중을 낮추세요.
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<?php if ($user_role !== 'USER'): ?>
+<div class="modal fade" id="addMenuModal" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered modal-lg">
+        <div class="modal-content border-0 shadow-lg rounded-4 overflow-hidden">
+            <form method="POST" action="menu_pricing.htm">
+                <input type="hidden" name="action" value="add_menu">
+                <div class="modal-header bg-primary text-white py-3 px-4">
+                    <h5 class="modal-title fs-6 fw-bold text-white"><i class="fa-solid fa-utensils me-2"></i>신규 메뉴 원가 등록</h5>
+                    <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body p-4">
+                    <div class="row">
+                        <div class="col-md-7 mb-3">
+                            <label class="form-label fw-bold small text-dark">메뉴명</label>
+                            <input type="text" name="menu_name" class="form-control" placeholder="예: 순살 후라이드 치킨" required>
+                        </div>
+                        <div class="col-md-5 mb-3">
+                            <label class="form-label fw-bold small text-dark">분류</label>
+                            <select name="category" class="form-select">
+                                <option value="메인메뉴">메인메뉴</option>
+                                <option value="식사류">식사류</option>
+                                <option value="세트메뉴">세트메뉴</option>
+                                <option value="음료/디저트">음료/디저트</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div class="row">
+                        <div class="col-md-6 mb-3">
+                            <label class="form-label fw-bold small text-dark">홀 판매가 (원)</label>
+                            <input type="number" name="sale_price" class="form-control" value="12000" required>
+                        </div>
+                        <div class="col-md-6 mb-3">
+                            <label class="form-label fw-bold small text-dark">배달앱 판매가 (원)</label>
+                            <input type="number" name="delivery_price" class="form-control" value="13000" required>
+                        </div>
+                    </div>
+                    <div class="row">
+                        <div class="col-md-6 mb-3">
+                            <label class="form-label fw-bold small text-dark">식자재 원가 (원)</label>
+                            <input type="number" name="ingredient_cost" class="form-control" value="4000" required>
+                        </div>
+                        <div class="col-md-6 mb-3">
+                            <label class="form-label fw-bold small text-dark">포장용기/비닐 비용 (원)</label>
+                            <input type="number" name="packaging_cost" class="form-control" value="800" required>
+                        </div>
+                    </div>
+                    <div class="row">
+                        <div class="col-md-4 mb-3">
+                            <label class="form-label fw-bold small text-dark">배달앱 중개수수료율 (%)</label>
+                            <input type="number" step="0.1" name="platform_fee_rate" class="form-control" value="9.8">
+                        </div>
+                        <div class="col-md-4 mb-3">
+                            <label class="form-label fw-bold small text-dark">결제 수수료율 PG (%)</label>
+                            <input type="number" step="0.1" name="payment_fee_rate" class="form-control" value="3.0">
+                        </div>
+                        <div class="col-md-4 mb-3">
+                            <label class="form-label fw-bold small text-dark">매장 부담 배달팁 (원)</label>
+                            <input type="number" name="store_delivery_tip" class="form-control" value="2500">
+                        </div>
+                    </div>
+                </div>
+                <div class="modal-footer bg-light py-2 px-3 border-top">
+                    <button type="button" class="btn btn-secondary btn-sm rounded-pill px-3" data-bs-dismiss="modal">취소</button>
+                    <button type="submit" class="btn btn-primary btn-sm rounded-pill px-4 fw-bold">등록하기</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+<?php endif; ?>
+
+<?php
+include_once 'footer.php';
+?>
+</body>
+</html>
