@@ -333,12 +333,9 @@ require_once 'header.php';
                                 </td>
                                 <td class="text-center">
                                     <?php if ($user_role !== 'USER' && !empty($c['id'])): ?>
-                                        <form method="POST" action="competitor_intel.htm" class="d-inline" onsubmit="return confirm('이 항목을 삭제하시겠습니까?');">
-                                            <input type="hidden" name="action" value="delete_competitor">
-                                            <input type="hidden" name="csrf_token" value="<?= htmlspecialchars($csrf_token) ?>">
-                                            <input type="hidden" name="item_id" value="<?= (int)$c['id'] ?>">
-                                            <button type="submit" class="btn btn-outline-danger btn-sm rounded-pill px-2 py-0" title="삭제"><i class="fa-solid fa-trash-can"></i></button>
-                                        </form>
+                                        <button type="button" class="btn btn-outline-danger btn-sm rounded-pill px-2 py-0" onclick="triggerDeleteComp(<?= (int)$c['id'] ?>, '<?= htmlspecialchars(addslashes($c['competitor_name'])) ?> - <?= htmlspecialchars(addslashes($c['menu_name'])) ?>')" title="삭제">
+                                            <i class="fa-solid fa-trash-can"></i>
+                                        </button>
                                     <?php else: ?>
                                         <span class="text-muted">-</span>
                                     <?php endif; ?>
@@ -348,6 +345,31 @@ require_once 'header.php';
                     </tbody>
                 </table>
             </div>
+        </div>
+    </div>
+</div>
+
+<!-- 개별 삭제 확인 모달 -->
+<div class="modal fade" id="deleteCompModal" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered modal-sm">
+        <div class="modal-content border-0 shadow-lg rounded-4 overflow-hidden">
+            <div class="modal-header bg-danger text-white py-2 px-3">
+                <h6 class="modal-title fw-bold fs-6"><i class="fa-solid fa-trash-can me-1"></i>항목 삭제</h6>
+                <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+            </div>
+            <form method="POST" action="competitor_intel.htm">
+                <input type="hidden" name="action" value="delete_competitor">
+                <input type="hidden" name="csrf_token" value="<?= htmlspecialchars($csrf_token) ?>">
+                <input type="hidden" name="item_id" id="deleteModalCompId" value="">
+                <div class="modal-body p-3 text-center">
+                    <p class="mb-1 text-dark fw-bold" id="deleteModalCompText">항목을 삭제하시겠습니까?</p>
+                    <small class="text-muted">삭제 시 대장에서 즉시 제거됩니다.</small>
+                </div>
+                <div class="modal-footer bg-light py-2 px-3 justify-content-center">
+                    <button type="button" class="btn btn-secondary btn-sm rounded-pill px-3" data-bs-dismiss="modal">취소</button>
+                    <button type="submit" class="btn btn-danger btn-sm rounded-pill px-3 fw-bold">삭제 확정</button>
+                </div>
+            </form>
         </div>
     </div>
 </div>
@@ -431,6 +453,14 @@ require_once 'header.php';
 </div>
 
 <script>
+function triggerDeleteComp(id, name) {
+    document.getElementById('deleteModalCompId').value = id;
+    document.getElementById('deleteModalCompText').innerText = `"${name}" 항목을 삭제하시겠습니까?`;
+    if (typeof bootstrap !== 'undefined') {
+        new bootstrap.Modal(document.getElementById('deleteCompModal')).show();
+    }
+}
+
 document.addEventListener('DOMContentLoaded', function() {
     const searchBtn = document.getElementById('btn_kakao_search');
     const searchInput = document.getElementById('api_search_query');

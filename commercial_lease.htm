@@ -101,7 +101,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         $business_premium = round($annual_profit * ($profit_multipliers[$store_type] ?? 0.85));
         $total_premium = $facility_premium + $business_premium;
 
-        // 환산보증금 상한선 체크 (서울 9억, 과밀억제권역 6.9억 등)
         $threshold = ($region === 'SEOUL') ? 900000000 : (($region === 'METRO') ? 690000000 : 540000000);
         $is_over_limit = ($converted_deposit > $threshold);
 
@@ -177,6 +176,13 @@ require_once 'header.php';
 <?php if ($flash_msg): ?>
     <div class="alert alert-success alert-dismissible fade show rounded-3 mb-4 shadow-sm small" role="alert">
         <i class="fa-solid fa-circle-check me-2 text-success"></i><?= htmlspecialchars($flash_msg) ?>
+        <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+    </div>
+<?php endif; ?>
+
+<?php if ($flash_err): ?>
+    <div class="alert alert-danger alert-dismissible fade show rounded-3 mb-4 shadow-sm small" role="alert">
+        <i class="fa-solid fa-triangle-exclamation me-2 text-danger"></i><?= htmlspecialchars($flash_err) ?>
         <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
     </div>
 <?php endif; ?>
@@ -263,12 +269,9 @@ require_once 'header.php';
                                     </td>
                                     <td class="text-center">
                                         <?php if ($user_role !== 'USER' && !empty($e['id'])): ?>
-                                            <form method="POST" action="commercial_lease.htm" class="d-inline" onsubmit="return confirm('이 진단 내역을 삭제하시겠습니까?');">
-                                                <input type="hidden" name="action" value="delete_eval">
-                                                <input type="hidden" name="csrf_token" value="<?= htmlspecialchars($csrf_token) ?>">
-                                                <input type="hidden" name="eval_id" value="<?= (int)$e['id'] ?>">
-                                                <button type="submit" class="btn btn-outline-danger btn-sm rounded-pill px-2 py-0"><i class="fa-solid fa-trash-can"></i></button>
-                                            </form>
+                                            <button type="button" class="btn btn-outline-danger btn-sm rounded-pill px-2 py-0" onclick="triggerDeleteLease(<?= (int)$e['id'] ?>, '<?= htmlspecialchars(addslashes($e['store_type'])) ?> (<?= $e['store_area_pyeong'] ?>평)')" title="삭제">
+                                                <i class="fa-solid fa-trash-can"></i>
+                                            </button>
                                         <?php else: ?>
                                             <span class="text-muted">-</span>
                                         <?php endif; ?>
@@ -279,6 +282,31 @@ require_once 'header.php';
                     </tbody>
                 </table>
             </div>
+        </div>
+    </div>
+</div>
+
+<!-- 개별 삭제 확인 모달 -->
+<div class="modal fade" id="deleteLeaseModal" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered modal-sm">
+        <div class="modal-content border-0 shadow-lg rounded-4 overflow-hidden">
+            <div class="modal-header bg-danger text-white py-2 px-3">
+                <h6 class="modal-title fw-bold fs-6"><i class="fa-solid fa-trash-can me-1"></i>평가 기록 삭제</h6>
+                <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+            </div>
+            <form method="POST" action="commercial_lease.htm">
+                <input type="hidden" name="action" value="delete_eval">
+                <input type="hidden" name="csrf_token" value="<?= htmlspecialchars($csrf_token) ?>">
+                <input type="hidden" name="eval_id" id="deleteModalEvalId" value="">
+                <div class="modal-body p-3 text-center">
+                    <p class="mb-1 text-dark fw-bold" id="deleteModalEvalText">평가 기록을 삭제하시겠습니까?</p>
+                    <small class="text-muted">삭제 시 대장에서 영구 제거됩니다.</small>
+                </div>
+                <div class="modal-footer bg-light py-2 px-3 justify-content-center">
+                    <button type="button" class="btn btn-secondary btn-sm rounded-pill px-3" data-bs-dismiss="modal">취소</button>
+                    <button type="submit" class="btn btn-danger btn-sm rounded-pill px-3 fw-bold">삭제 확정</button>
+                </div>
+            </form>
         </div>
     </div>
 </div>
@@ -321,7 +349,7 @@ require_once 'header.php';
                             <input type="number" name="deposit_amt" class="form-control" value="50000000" required>
                         </div>
                         <div class="col-md-6 mb-3">
-                            <label class="form-label fw-bold small text-dark">월 임대료 (원/부기세 별도)</label>
+                            <label class="form-label fw-bold small text-dark">월 임대료 (원/부가세 별도)</label>
                             <input type="number" name="monthly_rent" class="form-control" value="2500000" required>
                         </div>
                     </div>
@@ -359,6 +387,16 @@ require_once 'header.php';
     </div>
 </div>
 <?php endif; ?>
+
+<script>
+function triggerDeleteLease(id, desc) {
+    document.getElementById('deleteModalEvalId').value = id;
+    document.getElementById('deleteModalEvalText').innerText = `"${desc}" 평가 기록을 삭제하시겠습니까?`;
+    if (typeof bootstrap !== 'undefined') {
+        new bootstrap.Modal(document.getElementById('deleteLeaseModal')).show();
+    }
+}
+</script>
 
 <?php
 include_once 'footer.php';

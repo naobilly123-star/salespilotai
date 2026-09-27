@@ -113,7 +113,6 @@ if (empty($market_prices) && !empty($kamis_cert_key) && !empty($kamis_cert_id)) 
     }
 }
 
-// Open API 키 미등록 또는 오류 시 전 업종 표준 물가 지표 Fallback
 if (empty($market_prices)) {
     $market_prices = [
         ['name' => '원목 펄프/종이박스 (1,000매)', 'price' => '38,500원', 'change' => '+1.8%', 'trend' => 'up', 'desc' => '펄프 수입 원자재가 상승세 반영'],
@@ -125,7 +124,7 @@ if (empty($market_prices)) {
     ];
 }
 
-// POST 처리 (CSRF 검증 적용)
+// POST 처리
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
     if (!hash_equals($_SESSION['csrf_token'] ?? '', $_POST['csrf_token'] ?? '')) {
         $_SESSION['flash_err'] = '비정상적인 요청이거나 세션이 만료되었습니다.';
@@ -317,12 +316,9 @@ require_once 'header.php';
                                 </td>
                                 <td class="text-center">
                                     <?php if ($user_role !== 'USER' && !empty($item['id'])): ?>
-                                        <form method="POST" action="cost_inventory.htm" class="d-inline" onsubmit="return confirm('이 관리 품목을 삭제하시겠습니까?');">
-                                            <input type="hidden" name="action" value="delete_item">
-                                            <input type="hidden" name="csrf_token" value="<?= htmlspecialchars($csrf_token) ?>">
-                                            <input type="hidden" name="item_id" value="<?= (int)$item['id'] ?>">
-                                            <button type="submit" class="btn btn-outline-danger btn-sm rounded-pill px-2 py-0"><i class="fa-solid fa-trash-can"></i></button>
-                                        </form>
+                                        <button type="button" class="btn btn-outline-danger btn-sm rounded-pill px-2 py-0" onclick="triggerDeleteInvItem(<?= (int)$item['id'] ?>, '<?= htmlspecialchars(addslashes($item['item_name'])) ?>')" title="삭제">
+                                            <i class="fa-solid fa-trash-can"></i>
+                                        </button>
                                     <?php else: ?>
                                         <span class="text-muted">-</span>
                                     <?php endif; ?>
@@ -332,6 +328,31 @@ require_once 'header.php';
                     </tbody>
                 </table>
             </div>
+        </div>
+    </div>
+</div>
+
+<!-- 개별 삭제 확인 모달 -->
+<div class="modal fade" id="deleteInvModal" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered modal-sm">
+        <div class="modal-content border-0 shadow-lg rounded-4 overflow-hidden">
+            <div class="modal-header bg-danger text-white py-2 px-3">
+                <h6 class="modal-title fw-bold fs-6"><i class="fa-solid fa-trash-can me-1"></i>품목 삭제 확인</h6>
+                <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+            </div>
+            <form method="POST" action="cost_inventory.htm">
+                <input type="hidden" name="action" value="delete_item">
+                <input type="hidden" name="csrf_token" value="<?= htmlspecialchars($csrf_token) ?>">
+                <input type="hidden" name="item_id" id="deleteModalInvId" value="">
+                <div class="modal-body p-3 text-center">
+                    <p class="mb-1 text-dark fw-bold" id="deleteModalInvText">품목을 삭제하시겠습니까?</p>
+                    <small class="text-muted">삭제 시 재고 대장에서 즉시 제거됩니다.</small>
+                </div>
+                <div class="modal-footer bg-light py-2 px-3 justify-content-center">
+                    <button type="button" class="btn btn-secondary btn-sm rounded-pill px-3" data-bs-dismiss="modal">취소</button>
+                    <button type="submit" class="btn btn-danger btn-sm rounded-pill px-3 fw-bold">삭제 확정</button>
+                </div>
+            </form>
         </div>
     </div>
 </div>
@@ -393,6 +414,16 @@ require_once 'header.php';
     </div>
 </div>
 <?php endif; ?>
+
+<script>
+function triggerDeleteInvItem(id, name) {
+    document.getElementById('deleteModalInvId').value = id;
+    document.getElementById('deleteModalInvText').innerText = `"${name}" 품목을 삭제하시겠습니까?`;
+    if (typeof bootstrap !== 'undefined') {
+        new bootstrap.Modal(document.getElementById('deleteInvModal')).show();
+    }
+}
+</script>
 
 <?php
 include_once 'footer.php';
