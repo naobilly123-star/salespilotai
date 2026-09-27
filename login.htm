@@ -59,7 +59,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>로그인 - 소상공인 AI 매출분석 플랫폼</title>
+    <title>로그인 - 나오빌리 소상공인 AI 매출분석 플랫폼</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <!-- [디자인 개선] 현대적인 Pretendard 웹폰트 로드 -->
@@ -197,7 +197,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         }
 
         /* ========================================================================== */
-        /* <li>소셜 로그인 구분선 및 버튼 브랜드 디자인 스타일 */
+        /* 소셜 로그인 구분선 및 버튼 브랜드 디자인 스타일 */
         /* ========================================================================== */
         .social-divider {
             display: flex;
@@ -292,7 +292,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             color: #111827 !important;
             border-color: #d1d5db !important;
         }
-        /* ========================================================================== */
 
         @media (max-width: 575.98px) {
             .login-card {
@@ -301,7 +300,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             }
         }
     </style>
-    <!-- ========================================================================== -->
 </head>
 <body>
 
@@ -310,9 +308,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     <div class="login-card">
         <div class="text-center mb-4">
             <div class="login-title mb-2">
-                <i class="fa-solid fa-chart-line me-2"></i>BizProfit AI
+                <i class="fa-solid fa-chart-pie me-2"></i>나오빌리
             </div>
-            <p class="text-muted small mb-0">소상공인 맞춤형 AI 매출분석 솔루션</p>
+            <p class="text-muted small mb-0">소상공인 AI 매출분석 & 매장 경영 리포트</p>
         </div>
 
         <?php if (!empty($error)): ?>
@@ -357,7 +355,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         </form>
 
         <!-- ========================================================================== -->
-        <!-- <li>소셜 로그인 (카카오 / 네이버 / 구글) 연동 버튼 영역 -->
+        <!-- 소셜 로그인 (카카오 / 네이버 / 구글) 연동 버튼 영역 -->
         <!-- ========================================================================== -->
         <div class="social-divider">또는 간편 로그인</div>
 
@@ -365,7 +363,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             <!-- 1. 카카오 로그인 버튼 -->
             <a href="oauth_redirect.php?provider=kakao" class="btn-social btn-social-kakao">
                 <span class="social-icon-wrapper">
-                    <!-- Kakao Official Symbol Vector -->
                     <svg width="18" height="18" viewBox="0 0 24 24" fill="#000000">
                         <path d="M12 3C6.477 3 2 6.477 2 10.767c0 2.766 1.884 5.187 4.717 6.556-.208.775-.75 2.809-.86 3.245-.136.541.198.534.417.389.172-.114 2.738-1.859 3.844-2.61.619.091 1.25.138 1.882.138 5.523 0 10-3.477 10-7.718C22 6.477 17.523 3 12 3z"/>
                     </svg>
@@ -376,7 +373,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             <!-- 2. 네이버 로그인 버튼 -->
             <a href="oauth_redirect.php?provider=naver" class="btn-social btn-social-naver">
                 <span class="social-icon-wrapper">
-                    <!-- Naver Official Symbol Vector -->
                     <svg width="15" height="15" viewBox="0 0 24 24" fill="#FFFFFF">
                         <path d="M16.273 12.845L7.37 0H0v24h7.727V11.155L16.63 24H24V0h-7.727v12.845z"/>
                     </svg>
@@ -387,7 +383,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             <!-- 3. 구글 로그인 버튼 -->
             <a href="oauth_redirect.php?provider=google" class="btn-social btn-social-google">
                 <span class="social-icon-wrapper">
-                    <!-- Google Official Multi-color Symbol Vector -->
                     <svg width="18" height="18" viewBox="0 0 24 24">
                         <path fill="#4285F4" d="M23.745 12.27c0-.7-.06-1.4-.19-2.07H12v4.51h6.6c-.29 1.52-1.14 2.8-2.4 3.65v3h3.88c2.27-2.09 3.66-5.17 3.66-9.09z"/>
                         <path fill="#34A853" d="M12 24c3.24 0 5.95-1.08 7.93-2.91l-3.88-3c-1.08.72-2.45 1.16-4.05 1.16-3.12 0-5.77-2.1-6.72-4.93H1.26v3.1C3.26 21.36 7.33 24 12 24z"/>
@@ -398,7 +393,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 <span>Google 계정으로 로그인</span>
             </a>
         </div>
-        <!-- ========================================================================== -->
 
         <!-- 회원가입 전환 안내 -->
         <div class="text-center pt-3">

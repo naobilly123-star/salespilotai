@@ -1,0 +1,95 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>구독 플랜 결제 | 나오빌리</title>
+    <!-- Bootstrap 5 CSS -->
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <!-- 토스페이먼츠 결제위젯 SDK v2 -->
+    <script src="https://js.tosspayments.com/v2/standard"></script>
+    <style>
+        body { background-color: #f8fafc; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+        .checkout-box { max-width: 650px; margin: 40px auto; background: #ffffff; border-radius: 18px; border: 1px solid #e2e8f0; padding: 28px; box-shadow: 0 4px 20px rgba(0,0,0,0.05); }
+        .plan-badge { background-color: #eff6ff; color: #2563eb; font-weight: 700; padding: 6px 12px; border-radius: 50rem; font-size: 0.82rem; }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <div class="checkout-box">
+        <div class="d-flex justify-content-between align-items-center mb-3">
+            <div>
+                <span class="plan-badge mb-2 d-inline-block">소상공인 올인원 프로 멤버십</span>
+                <h4 class="fw-bold text-dark mb-1">매장 매출 극대화 플랜 구독</h4>
+            </div>
+            <div class="text-end">
+                <span class="text-muted text-decoration-line-through small">월 49,000원</span>
+                <div class="fs-4 fw-bold text-primary">월 29,900원</div>
+            </div>
+        </div>
+        
+        <div class="p-3 bg-light rounded-3 border mb-4 small text-secondary">
+            <i class="fa-solid fa-circle-check text-success me-1"></i> 국세청 전자세무 실시간 연동 무제한<br>
+            <i class="fa-solid fa-circle-check text-success me-1"></i> AI 배달앱 역마진 방지 및 맞춤 마케팅 전략 자동 생성<br>
+            <i class="fa-solid fa-circle-check text-success me-1"></i> 100% 사업자 지출증빙 및 매입세액공제 영수증 즉시 발급
+        </div>
+
+        <!-- 토스페이먼츠 결제 UI 렌더링 영역 -->
+        <div id="payment-method"></div>
+        <!-- 이용약관 렌더링 영역 -->
+        <div id="agreement"></div>
+
+        <button id="payment-button" class="btn btn-primary w-100 py-3 fw-bold rounded-pill shadow-sm fs-6 mt-4">
+            안전하게 29,900원 결제하고 즉시 시작하기
+        </button>
+    </div>
+</div>
+
+<script>
+    const clientKey = "test_gck_docs_Ovk5rk1Ewk5rmxwABekJYAncest"; // 발급받으신 클라이언트 키 입력
+    const customerKey = "USER_ID_<?= $user_id ?>"; // 고유 회원 식별값
+
+    // 1. 토스페이먼츠 SDK 초기화
+    const tossPayments = TossPayments(clientKey);
+    const widgets = tossPayments.widgets({ customerKey });
+
+    // 2. 결제 금액 설정
+    widgets.setAmount({
+        currency: "KRW",
+        value: 29900
+    });
+
+    // 3. 결제수단 위젯 렌더링 (간편결제, 카드사 무이자 혜택 자동 표출)
+    widgets.renderPaymentMethods({
+        selector: "#payment-method",
+        variantKey: "DEFAULT"
+    });
+
+    // 4. 이용약관 위젯 렌더링
+    widgets.renderAgreement({
+        selector: "#agreement",
+        variantKey: "AGREEMENT"
+    });
+
+    // 5. 결제하기 버튼 클릭 이벤트
+    document.getElementById("payment-button").addEventListener("click", async function () {
+        const orderId = "ORDER_" + new Date().getTime();
+        
+        try {
+            await widgets.requestPayment({
+                orderId: orderId,
+                orderName: "나오빌리 프로 플랜 월 정기구독",
+                successUrl: window.location.origin + "/payment_success.php",
+                failUrl: window.location.origin + "/payment_fail.php",
+                customerEmail: "<?= htmlspecialchars($current_user_email) ?>",
+                customerName: "<?= htmlspecialchars($store_name) ?>",
+                customerMobilePhone: "<?= htmlspecialchars($current_user_phone) ?>"
+            });
+        } catch (error) {
+            console.error("결제 요청 실패:", error);
+        }
+    });
+</script>
+</body>
+</html>

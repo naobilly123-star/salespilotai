@@ -1,5 +1,7 @@
 <?php
-/* 회원가입 신청 페이지 (최고관리자 승인 대기 방식) */
+/* ========================================================================== */
+/* 회원가입 신청 페이지 (사업자 점주 승인제 & 개인/예비창업자 투트랙 완비본) */
+/* ========================================================================== */
 require_once 'db.php';
 
 $msg = '';
@@ -11,68 +13,118 @@ if (isset($_SESSION['user_id'])) {
 }
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
-    $username   = trim($_POST['username'] ?? '');
-    $password   = $_POST['password'] ?? '';
+    $account_type     = trim($_POST['account_type'] ?? 'BIZ'); // BIZ(사업자), PERSONAL(개인/예비창업자)
+    $username         = trim($_POST['username'] ?? '');
+    $password         = $_POST['password'] ?? '';
     $password_confirm = $_POST['password_confirm'] ?? '';
-    $store_name = trim($_POST['store_name'] ?? '');
+    $owner_name       = trim($_POST['owner_name'] ?? '');
+    $phone            = trim($_POST['phone'] ?? '');
+    $email            = trim($_POST['email'] ?? '');
+    $address          = trim($_POST['address'] ?? '');
 
-    $owner_name = trim($_POST['owner_name'] ?? '');
-    $phone      = trim($_POST['phone'] ?? '');
-    $email      = trim($_POST['email'] ?? '');
-    $biz_no     = trim($_POST['biz_no'] ?? '');
-    $address    = trim($_POST['address'] ?? '');
+    if ($account_type === 'PERSONAL') {
+        // [개인 / 예비창업자 가입 처리]
+        $store_name   = trim($_POST['personal_store_name'] ?? '');
+        if (empty($store_name)) {
+            $store_name = $owner_name . ' (예비창업자)';
+        }
+        $biz_no       = ''; // 개인은 사업자번호 없음
+        $biz_type     = '예비창업/개인 시뮬레이션';
+        $user_status  = 'APPROVED'; // 개인 회원은 가입 즉시 시뮬레이션 체험 가능하도록 승인완료 처리
+        $user_role    = 'USER';
 
-    /* 대분류, 상세업종 및 직접입력값 결합 처리 */
-    $biz_category = trim($_POST['biz_category'] ?? '');
-    $biz_sub      = trim($_POST['biz_sub'] ?? '');
-    $biz_custom   = trim($_POST['biz_custom'] ?? '');
-
-    if ($biz_sub === '직접입력' || $biz_category === '기타 업종') {
-        $final_sub = !empty($biz_custom) ? $biz_custom : '기타상세';
-        $biz_type  = $biz_category . ' > ' . $final_sub;
-    } elseif (!empty($biz_category) && !empty($biz_sub)) {
-        $biz_type  = $biz_category . ' > ' . $biz_sub;
-    } else {
-        $biz_type  = !empty($biz_category) ? $biz_category : '기타/미지정';
-    }
-
-    if (!empty($username) && !empty($password) && !empty($store_name) && !empty($owner_name) && !empty($phone)) {
-        if ($password !== $password_confirm) {
-            $error = '비밀번호와 비밀번호 확인이 일치하지 않습니다.';
-        } else {
-            // 아이디 중복 확인
-            $stmt = $pdo->prepare("SELECT id FROM users WHERE username = :username");
-            $stmt->execute(['username' => $username]);
-            if ($stmt->fetch()) {
-                $error = '이미 존재하거나 사용 중인 아이디입니다.';
+        if (!empty($username) && !empty($password) && !empty($owner_name) && !empty($phone)) {
+            if ($password !== $password_confirm) {
+                $error = '비밀번호와 비밀번호 확인이 일치하지 않습니다.';
             } else {
-                // 비밀번호 암호화 및 PENDING 상태로 신규 등록
-                $hashed = password_hash($password, PASSWORD_DEFAULT);
-                $insert = $pdo->prepare("
-                    INSERT INTO users (username, password, store_name, owner_name, phone, email, biz_no, biz_type, address, status, role) 
-                    VALUES (:username, :password, :store_name, :owner_name, :phone, :email, :biz_no, :biz_type, :address, 'PENDING', 'USER')
-                ");
-                $result = $insert->execute([
-                    'username'   => $username, 
-                    'password'   => $hashed, 
-                    'store_name' => $store_name,
-                    'owner_name' => $owner_name,
-                    'phone'      => $phone,
-                    'email'      => $email,
-                    'biz_no'     => $biz_no,
-                    'biz_type'   => $biz_type, /* 정밀 조합된 업종 문자열 저장 */
-                    'address'    => $address
-                ]);
-
-                if ($result) {
-                    $msg = '회원가입 신청이 완료되었습니다! 최고 관리자의 승인 후 로그인할 수 있습니다.';
+                $stmt = $pdo->prepare("SELECT id FROM users WHERE username = :username");
+                $stmt->execute(['username' => $username]);
+                if ($stmt->fetch()) {
+                    $error = '이미 존재하거나 사용 중인 아이디입니다.';
                 } else {
-                    $error = '회원가입 처리 중 오류가 발생했습니다.';
+                    $hashed = password_hash($password, PASSWORD_DEFAULT);
+                    $insert = $pdo->prepare("
+                        INSERT INTO users (username, password, store_name, owner_name, phone, email, biz_no, biz_type, address, status, role) 
+                        VALUES (:username, :password, :store_name, :owner_name, :phone, :email, :biz_no, :biz_type, :address, :status, :role)
+                    ");
+                    $result = $insert->execute([
+                        'username'   => $username, 
+                        'password'   => $hashed, 
+                        'store_name' => $store_name,
+                        'owner_name' => $owner_name,
+                        'phone'      => $phone,
+                        'email'      => $email,
+                        'biz_no'     => $biz_no,
+                        'biz_type'   => $biz_type,
+                        'address'    => $address,
+                        'status'     => $user_status,
+                        'role'       => $user_role
+                    ]);
+
+                    if ($result) {
+                        $msg = '개인(예비창업자) 계정 가입이 완료되었습니다! 로그인 후 손익분기점, 인건비 시뮬레이터를 즉시 이용하실 수 있습니다.';
+                    } else {
+                        $error = '회원가입 처리 중 오류가 발생했습니다.';
+                    }
                 }
             }
+        } else {
+            $error = '필수 항목(아이디, 비밀번호, 이름, 연락처)을 모두 입력해 주세요.';
         }
     } else {
-        $error = '필수 항목(아이디, 비밀번호, 점포명, 대표자명, 연락처)을 모두 입력해 주세요.';
+        // [기존 사업자 회원 가입 처리 - 100% 동일 로직 및 승인대기 보존]
+        $store_name   = trim($_POST['store_name'] ?? '');
+        $biz_no       = trim($_POST['biz_no'] ?? '');
+
+        $biz_category = trim($_POST['biz_category'] ?? '');
+        $biz_sub      = trim($_POST['biz_sub'] ?? '');
+        $biz_custom   = trim($_POST['biz_custom'] ?? '');
+
+        if ($biz_sub === '직접입력' || $biz_category === '기타 업종') {
+            $final_sub = !empty($biz_custom) ? $biz_custom : '기타상세';
+            $biz_type  = $biz_category . ' > ' . $final_sub;
+        } elseif (!empty($biz_category) && !empty($biz_sub)) {
+            $biz_type  = $biz_category . ' > ' . $biz_sub;
+        } else {
+            $biz_type  = !empty($biz_category) ? $biz_category : '기타/미지정';
+        }
+
+        if (!empty($username) && !empty($password) && !empty($store_name) && !empty($owner_name) && !empty($phone)) {
+            if ($password !== $password_confirm) {
+                $error = '비밀번호와 비밀번호 확인이 일치하지 않습니다.';
+            } else {
+                $stmt = $pdo->prepare("SELECT id FROM users WHERE username = :username");
+                $stmt->execute(['username' => $username]);
+                if ($stmt->fetch()) {
+                    $error = '이미 존재하거나 사용 중인 아이디입니다.';
+                } else {
+                    $hashed = password_hash($password, PASSWORD_DEFAULT);
+                    $insert = $pdo->prepare("
+                        INSERT INTO users (username, password, store_name, owner_name, phone, email, biz_no, biz_type, address, status, role) 
+                        VALUES (:username, :password, :store_name, :owner_name, :phone, :email, :biz_no, :biz_type, :address, 'PENDING', 'USER')
+                    ");
+                    $result = $insert->execute([
+                        'username'   => $username, 
+                        'password'   => $hashed, 
+                        'store_name' => $store_name,
+                        'owner_name' => $owner_name,
+                        'phone'      => $phone,
+                        'email'      => $email,
+                        'biz_no'     => $biz_no,
+                        'biz_type'   => $biz_type,
+                        'address'    => $address
+                    ]);
+
+                    if ($result) {
+                        $msg = '사업자 회원가입 신청이 완료되었습니다! 최고 관리자의 승인 후 로그인할 수 있습니다.';
+                    } else {
+                        $error = '회원가입 처리 중 오류가 발생했습니다.';
+                    }
+                }
+            }
+        } else {
+            $error = '필수 항목(아이디, 비밀번호, 점포명, 대표자명, 연락처)을 모두 입력해 주세요.';
+        }
     }
 }
 ?>
@@ -81,7 +133,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>회원가입 신청 - 소상공인 AI 매출분석 플랫폼</title>
+    <title>회원가입 신청 - 나오빌리 소상공인 AI 매출분석 플랫폼</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <link rel="stylesheet" as="style" crossorigin href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.min.css" />
@@ -143,6 +195,67 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         .register-title i {
             color: var(--primary-color);
             filter: drop-shadow(0 2px 6px rgba(37, 99, 235, 0.35));
+        }
+
+        /* 탭 토글 버튼 반응형 완벽 보정 */
+        .account-type-toggle {
+            display: flex;
+            background: #f1f5f9;
+            border-radius: 14px;
+            padding: 5px;
+            margin-bottom: 1.35rem;
+            border: 1px solid #e2e8f0;
+            gap: 5px;
+        }
+        .account-type-btn {
+            flex: 1;
+            text-align: center;
+            padding: 10px 8px;
+            border-radius: 10px;
+            cursor: pointer;
+            transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+            color: #64748b;
+            user-select: none;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            gap: 3px;
+        }
+        .account-type-btn .btn-main-txt {
+            font-size: clamp(0.82rem, 1.1vw, 0.9rem);
+            font-weight: 700;
+            white-space: nowrap;
+            display: flex;
+            align-items: center;
+            gap: 5px;
+        }
+        .account-type-btn .btn-sub-txt {
+            font-size: clamp(0.7rem, 0.9vw, 0.76rem);
+            font-weight: 500;
+            color: #94a3b8;
+            white-space: nowrap;
+        }
+        .account-type-btn.active {
+            background: #ffffff;
+            color: #2563eb;
+            box-shadow: 0 3px 10px rgba(0, 0, 0, 0.08);
+        }
+        .account-type-btn.active .btn-sub-txt {
+            color: #3b82f6;
+            font-weight: 600;
+        }
+
+        @media (max-width: 480px) {
+            .account-type-toggle {
+                flex-direction: column;
+                gap: 4px;
+            }
+            .account-type-btn {
+                padding: 10px 12px;
+                flex-direction: row;
+                justify-content: space-between;
+            }
         }
 
         .form-label-responsive {
@@ -231,11 +344,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
 <div class="main-wrapper">
     <div class="register-card">
-        <div class="text-center mb-4">
+        <div class="text-center mb-3">
             <div class="register-title mb-2">
-                <i class="fa-solid fa-user-plus me-2"></i>회원가입 신청
+                <i class="fa-solid fa-chart-pie me-2"></i>회원가입 신청
             </div>
-            <p class="text-muted small mb-0">AI 매출분석 서비스를 위한 상세 사업장 정보를 입력해 주세요.</p>
+            <p class="text-muted small mb-0">나오빌리 - 소상공인 AI 매출분석 & 매장 경영 리포트</p>
         </div>
 
         <?php if (!empty($msg)): ?>
@@ -252,6 +365,19 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         <?php endif; ?>
 
         <form method="POST" action="register.htm" id="registerForm">
+            <!-- 회원 유형 선택 탭 (2줄 구조로 모바일 단어 잘림 100% 방지) -->
+            <input type="hidden" name="account_type" id="input_account_type" value="BIZ">
+            <div class="account-type-toggle">
+                <div class="account-type-btn active" id="btn_type_biz" onclick="switchAccountType('BIZ')">
+                    <span class="btn-main-txt"><i class="fa-solid fa-store"></i>소상공인 사업자</span>
+                    <span class="btn-sub-txt">(실제 매장 운영 점주)</span>
+                </div>
+                <div class="account-type-btn" id="btn_type_personal" onclick="switchAccountType('PERSONAL')">
+                    <span class="btn-main-txt"><i class="fa-solid fa-user-tie"></i>개인 / 예비 창업자</span>
+                    <span class="btn-sub-txt">(상권·손익 시뮬레이션)</span>
+                </div>
+            </div>
+
             <!-- 기본 계정 정보 -->
             <div class="section-badge"><i class="fa-solid fa-lock me-1"></i>계정 정보 (필수)</div>
             
@@ -279,22 +405,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 </div>
             </div>
 
-            <!-- 사업자 & 점포 상세정보 -->
-            <div class="section-badge mt-2"><i class="fa-solid fa-store me-1"></i>사업자 & 점포 상세정보</div>
-
+            <!-- 인적 정보 -->
+            <div class="section-badge mt-1"><i class="fa-solid fa-id-card me-1"></i>기본 정보 (필수)</div>
             <div class="row g-2 mb-3">
                 <div class="col-md-6">
-                    <label class="form-label form-label-responsive">점포명(상호명) <span class="text-danger">*</span></label>
+                    <label class="form-label form-label-responsive" id="label_owner_name">대표자명 <span class="text-danger">*</span></label>
                     <div class="input-group input-group-modern">
-                        <span class="input-group-text"><i class="fa-solid fa-shop"></i></span>
-                        <input type="text" name="store_name" class="form-control" placeholder="예: 나오빌리 맛있는 카페" required>
-                    </div>
-                </div>
-                <div class="col-md-6">
-                    <label class="form-label form-label-responsive">대표자명 <span class="text-danger">*</span></label>
-                    <div class="input-group input-group-modern">
-                        <span class="input-group-text"><i class="fa-solid fa-user-tie"></i></span>
-                        <input type="text" name="owner_name" class="form-control" placeholder="대표자 성함" required>
+                        <span class="input-group-text"><i class="fa-solid fa-user"></i></span>
+                        <input type="text" name="owner_name" id="input_owner_name" class="form-control" placeholder="이름 입력" required>
                     </div>
                 </div>
                 <div class="col-md-6">
@@ -311,61 +429,90 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                         <input type="email" name="email" class="form-control" placeholder="sample@domain.com">
                     </div>
                 </div>
-                <div class="col-12">
-                    <label class="form-label form-label-responsive">사업자등록번호</label>
-                    <div class="input-group input-group-modern">
-                        <span class="input-group-text"><i class="fa-solid fa-id-card"></i></span>
-                        <input type="text" name="biz_no" class="form-control" placeholder="000-00-00000">
-                    </div>
-                </div>
-
-                <!-- 대분류 & 소분류 & 직접입력 연동 필드 -->
                 <div class="col-md-6">
-                    <label class="form-label form-label-responsive">업종 대분류 <span class="text-danger">*</span></label>
-                    <div class="input-group input-group-modern">
-                        <span class="input-group-text"><i class="fa-solid fa-layer-group"></i></span>
-                        <select name="biz_category" id="reg_biz_category" class="form-select" onchange="updateSubCategories('reg')" required>
-                            <option value="">대분류 선택</option>
-                            <option value="음식점/외식업">음식점 / 외식업</option>
-                            <option value="카페/베이커리">카페 / 디저트 / 베이커리</option>
-                            <option value="도소매/유통업">도소매 / 유통업</option>
-                            <option value="서비스/뷰티/여가">서비스 / 뷰티 / 여가·스포츠</option>
-                            <option value="정보통신/IT/온라인">정보통신 / IT / 온라인 쇼핑몰</option>
-                            <option value="교육/학원">교육 / 학원 / 교습소</option>
-                            <option value="제조/인쇄/공방">제조 / 인쇄 / 공방</option>
-                            <option value="기타 업종">기타 업종 (직접 입력)</option>
-                        </select>
-                    </div>
-                </div>
-                <div class="col-md-6">
-                    <label class="form-label form-label-responsive">상세 소분류 <span class="text-danger">*</span></label>
-                    <div class="input-group input-group-modern">
-                        <span class="input-group-text"><i class="fa-solid fa-tags"></i></span>
-                        <select name="biz_sub" id="reg_biz_sub" class="form-select" onchange="checkCustomSub('reg')" required>
-                            <option value="">상세업종 선택</option>
-                        </select>
-                    </div>
-                </div>
-                <!-- 기타/직접입력 선택 시 노출되는 입력란 -->
-                <div class="col-12" id="reg_custom_wrap" style="display: none;">
-                    <label class="form-label form-label-responsive text-primary"><i class="fa-solid fa-pen-nib me-1"></i>상세 업종 직접 입력</label>
-                    <div class="input-group input-group-modern border-primary">
-                        <span class="input-group-text"><i class="fa-solid fa-keyboard text-primary"></i></span>
-                        <input type="text" name="biz_custom" id="reg_biz_custom" class="form-control" placeholder="예: 소프트웨어 개발 및 데이터 컨설팅, 무인 밀키트 판매점 등">
-                    </div>
-                </div>
-
-                <div class="col-12">
-                    <label class="form-label form-label-responsive">사업장 주소</label>
+                    <label class="form-label form-label-responsive" id="label_address">사업장(거주) 주소</label>
                     <div class="input-group input-group-modern">
                         <span class="input-group-text"><i class="fa-solid fa-location-dot"></i></span>
-                        <input type="text" name="address" class="form-control" placeholder="사업장 도로명 또는 지번 주소">
+                        <input type="text" name="address" class="form-control" placeholder="도로명 또는 지번 주소">
                     </div>
                 </div>
             </div>
 
-            <button type="submit" class="btn btn-modern-primary w-100 mb-3 form-label-responsive mt-3">
-                가입 신청하기 <i class="fa-solid fa-arrow-right ms-1"></i>
+            <!-- [1] 사업자 회원 전용 입력 블록 -->
+            <div id="biz_info_section">
+                <div class="section-badge mt-1"><i class="fa-solid fa-store me-1"></i>사업자 & 점포 상세정보 (필수)</div>
+
+                <div class="row g-2 mb-3">
+                    <div class="col-md-6">
+                        <label class="form-label form-label-responsive">점포명(상호명) <span class="text-danger">*</span></label>
+                        <div class="input-group input-group-modern">
+                            <span class="input-group-text"><i class="fa-solid fa-shop"></i></span>
+                            <input type="text" name="store_name" id="input_store_name" class="form-control" placeholder="예: 나오빌리 맛있는 카페" required>
+                        </div>
+                    </div>
+                    <div class="col-md-6">
+                        <label class="form-label form-label-responsive">사업자등록번호</label>
+                        <div class="input-group input-group-modern">
+                            <span class="input-group-text"><i class="fa-solid fa-file-invoice"></i></span>
+                            <input type="text" name="biz_no" id="input_biz_no" class="form-control" placeholder="000-00-00000">
+                        </div>
+                    </div>
+
+                    <div class="col-md-6">
+                        <label class="form-label form-label-responsive">업종 대분류 <span class="text-danger">*</span></label>
+                        <div class="input-group input-group-modern">
+                            <span class="input-group-text"><i class="fa-solid fa-layer-group"></i></span>
+                            <select name="biz_category" id="reg_biz_category" class="form-select" onchange="updateSubCategories('reg')" required>
+                                <option value="">대분류 선택</option>
+                                <option value="음식점/외식업">음식점 / 외식업</option>
+                                <option value="카페/베이커리">카페 / 디저트 / 베이커리</option>
+                                <option value="도소매/유통업">도소매 / 유통업</option>
+                                <option value="서비스/뷰티/여가">서비스 / 뷰티 / 여가·스포츠</option>
+                                <option value="정보통신/IT/온라인">정보통신 / IT / 온라인 쇼핑몰</option>
+                                <option value="교육/학원">교육 / 학원 / 교습소</option>
+                                <option value="제조/인쇄/공방">제조 / 인쇄 / 공방</option>
+                                <option value="기타 업종">기타 업종 (직접 입력)</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div class="col-md-6">
+                        <label class="form-label form-label-responsive">상세 소분류 <span class="text-danger">*</span></label>
+                        <div class="input-group input-group-modern">
+                            <span class="input-group-text"><i class="fa-solid fa-tags"></i></span>
+                            <select name="biz_sub" id="reg_biz_sub" class="form-select" onchange="checkCustomSub('reg')" required>
+                                <option value="">상세업종 선택</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div class="col-12" id="reg_custom_wrap" style="display: none;">
+                        <label class="form-label form-label-responsive text-primary"><i class="fa-solid fa-pen-nib me-1"></i>상세 업종 직접 입력</label>
+                        <div class="input-group input-group-modern border-primary">
+                            <span class="input-group-text"><i class="fa-solid fa-keyboard text-primary"></i></span>
+                            <input type="text" name="biz_custom" id="reg_biz_custom" class="form-control" placeholder="예: 소프트웨어 개발 및 데이터 컨설팅, 무인 밀키트 판매점 등">
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- [2] 개인/예비창업자 회원 전용 입력 블록 (기본 숨김) -->
+            <div id="personal_info_section" style="display: none;">
+                <div class="section-badge mt-1"><i class="fa-solid fa-lightbulb me-1"></i>예비 창업 정보 (선택사항)</div>
+                <div class="row g-2 mb-3">
+                    <div class="col-12">
+                        <label class="form-label form-label-responsive">희망 창업 상호명 또는 프로젝트명 (선택)</label>
+                        <div class="input-group input-group-modern">
+                            <span class="input-group-text"><i class="fa-solid fa-pen"></i></span>
+                            <input type="text" name="personal_store_name" id="input_personal_store_name" class="form-control" placeholder="미입력 시 이름으로 자동 설정됩니다 (예: 커피창업준비팀)">
+                        </div>
+                        <div class="form-text small text-muted">
+                            <i class="fa-solid fa-circle-check text-success me-1"></i>개인 계정은 사업자등록번호 없이 가입 즉시 손익분기점(BEP) 계산기 및 인건비 시뮬레이터를 무료 이용할 수 있습니다.
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <button type="submit" id="btn_submit_register" class="btn btn-modern-primary w-100 mb-3 form-label-responsive mt-3">
+                사업자 회원가입 신청하기 <i class="fa-solid fa-arrow-right ms-1"></i>
             </button>
 
             <div class="text-center pt-1">
@@ -377,8 +524,48 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     </div>
 </div>
 
-<!-- 업종 2단계 연동 스크립트 -->
 <script>
+// 회원 유형 스위칭 함수
+function switchAccountType(type) {
+    document.getElementById('input_account_type').value = type;
+    const btnBiz = document.getElementById('btn_type_biz');
+    const btnPersonal = document.getElementById('btn_type_personal');
+    const bizSection = document.getElementById('biz_info_section');
+    const personalSection = document.getElementById('personal_info_section');
+
+    const inputStoreName = document.getElementById('input_store_name');
+    const selectBizCat = document.getElementById('reg_biz_category');
+    const selectBizSub = document.getElementById('reg_biz_sub');
+    const labelOwnerName = document.getElementById('label_owner_name');
+    const btnSubmit = document.getElementById('btn_submit_register');
+
+    if (type === 'PERSONAL') {
+        btnPersonal.classList.add('active');
+        btnBiz.classList.remove('active');
+        bizSection.style.display = 'none';
+        personalSection.style.display = 'block';
+
+        inputStoreName.required = false;
+        selectBizCat.required = false;
+        selectBizSub.required = false;
+
+        labelOwnerName.innerHTML = '성명(이름) <span class="text-danger">*</span>';
+        btnSubmit.innerHTML = '개인 계정으로 즉시 시작하기 <i class="fa-solid fa-arrow-right ms-1"></i>';
+    } else {
+        btnBiz.classList.add('active');
+        btnPersonal.classList.remove('active');
+        bizSection.style.display = 'block';
+        personalSection.style.display = 'none';
+
+        inputStoreName.required = true;
+        selectBizCat.required = true;
+        selectBizSub.required = true;
+
+        labelOwnerName.innerHTML = '대표자명 <span class="text-danger">*</span>';
+        btnSubmit.innerHTML = '사업자 회원가입 신청하기 <i class="fa-solid fa-arrow-right ms-1"></i>';
+    }
+}
+
 const bizData = {
     "음식점/외식업": ["한식 일반", "고기/구이점", "중식", "일식/초밥", "양식/패밀리레스토랑", "치킨/호프", "분식/야식", "패스트푸드", "주점/포차", "배달전문음식점", "직접입력"],
     "카페/베이커리": ["커피전문점(카페)", "베이커리/제과점", "디저트/마카롱", "떡/전통찻집", "아이스크림/빙수", "테이크아웃 전문", "직접입력"],
@@ -395,6 +582,7 @@ function updateSubCategories(prefix) {
     const subSelect = document.getElementById(prefix + '_biz_sub');
     const customWrap = document.getElementById(prefix + '_custom_wrap');
     const customInput = document.getElementById(prefix + '_biz_custom');
+    if (!catSelect || !subSelect) return;
     
     const selectedCat = catSelect.value;
     subSelect.innerHTML = '<option value="">상세업종 선택</option>';
@@ -409,17 +597,17 @@ function updateSubCategories(prefix) {
 
         if (selectedCat === "기타 업종") {
             subSelect.value = "직접입력";
-            customWrap.style.display = 'block';
+            if (customWrap) customWrap.style.display = 'block';
             if (customInput) customInput.required = true;
         } else {
-            customWrap.style.display = 'none';
+            if (customWrap) customWrap.style.display = 'none';
             if (customInput) {
                 customInput.required = false;
                 customInput.value = '';
             }
         }
     } else {
-        customWrap.style.display = 'none';
+        if (customWrap) customWrap.style.display = 'none';
         if (customInput) {
             customInput.required = false;
             customInput.value = '';
@@ -431,13 +619,14 @@ function checkCustomSub(prefix) {
     const subSelect = document.getElementById(prefix + '_biz_sub');
     const customWrap = document.getElementById(prefix + '_custom_wrap');
     const customInput = document.getElementById(prefix + '_biz_custom');
+    const catSelect = document.getElementById(prefix + '_biz_category');
+    if (!subSelect || !customWrap) return;
 
     if (subSelect.value === '직접입력') {
         customWrap.style.display = 'block';
         if (customInput) customInput.required = true;
     } else {
-        const catSelect = document.getElementById(prefix + '_biz_category');
-        if (catSelect.value !== '기타 업종') {
+        if (catSelect && catSelect.value !== '기타 업종') {
             customWrap.style.display = 'none';
             if (customInput) {
                 customInput.required = false;

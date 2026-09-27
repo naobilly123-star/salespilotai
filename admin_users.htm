@@ -1,5 +1,5 @@
 <?php
-/* 최고 관리자 전용 회원 승인 및 권한 관리 페이지 */
+/* 최고 관리자 전용 회원 승인 및 상세 권한 관리 페이지 */
 if (session_status() === PHP_SESSION_NONE) {
     session_start();
 }
@@ -53,7 +53,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         }
 
         if (empty($username) || empty($password) || empty($store_name)) {
-            $_SESSION['flash_msg'] = '오류: 모든 필수 항목(아이디, 비밀번호, 점포명)을 입력해주세요.';
+            $_SESSION['flash_msg'] = '오류: 필수 항목(아이디, 비밀번호, 점포명/성명)을 입력해주세요.';
         } else {
             $chk = $pdo->prepare("SELECT id FROM users WHERE username = :username");
             $chk->execute(['username' => $username]);
@@ -108,7 +108,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         }
 
         if (empty($store_name)) {
-            $_SESSION['flash_msg'] = '오류: 점포명을 입력해주세요.';
+            $_SESSION['flash_msg'] = '오류: 점포명 또는 성명을 입력해주세요.';
         } else {
             if (!empty($new_password)) {
                 $hashed_password = password_hash($new_password, PASSWORD_DEFAULT);
@@ -293,10 +293,10 @@ $user_list = $users_stmt->fetchAll();
                     <tr>
                         <th style="width: 4%;" class="text-center">ID</th>
                         <th style="width: 9%;" class="text-center">아이디</th>
-                        <th style="width: 13%;" class="text-center">점포명</th>
+                        <th style="width: 14%;" class="text-center">점포명 / 성명</th>
                         <th style="width: 8%;" class="text-center">대표자</th>
                         <th style="width: 10%;" class="text-center">연락처</th>
-                        <th style="width: 16%;" class="text-center">업종 (대분류 > 상세)</th>
+                        <th style="width: 16%;" class="text-center">업종 (구분)</th>
                         <th style="width: 13%;" class="text-center">신청일시</th>
                         <th style="width: 11%;" class="text-center">권한 변경</th>
                         <th style="width: 6%;" class="text-center">상태</th>
@@ -305,17 +305,27 @@ $user_list = $users_stmt->fetchAll();
                 </thead>
                 <tbody>
                     <?php foreach ($user_list as $u): ?>
+                    <?php 
+                        $is_personal_user = (strpos($u['biz_type'] ?? '', '예비창업') !== false || ($u['role'] === 'USER' && empty($u['biz_no'])));
+                    ?>
                     <tr>
                         <td class="text-center text-muted"><?= $u['id'] ?></td>
                         <td class="fw-bold text-center text-dark"><?= htmlspecialchars($u['username']) ?></td>
-                        <td class="text-center fw-semibold text-primary"><?= htmlspecialchars($u['store_name']) ?></td>
+                        <td class="text-center fw-semibold text-primary">
+                            <?= htmlspecialchars($u['store_name']) ?>
+                            <?php if ($is_personal_user): ?>
+                                <span class="badge bg-secondary-subtle text-secondary border ms-1" style="font-size: 0.7rem;">개인</span>
+                            <?php endif; ?>
+                        </td>
                         <td class="text-center"><?= htmlspecialchars($u['owner_name'] ?? '-') ?></td>
                         <td class="text-center text-secondary small"><?= htmlspecialchars($u['phone'] ?? '-') ?></td>
                         
                         <td class="text-center">
                             <?php 
                             $b_type = $u['biz_type'] ?? '';
-                            if (!empty($b_type) && strpos($b_type, ' > ') !== false) {
+                            if ($is_personal_user) {
+                                echo '<span class="badge bg-info-subtle text-info border border-info-subtle px-2 py-1"><i class="fa-solid fa-user-tie me-1"></i>예비창업/개인</span>';
+                            } elseif (!empty($b_type) && strpos($b_type, ' > ') !== false) {
                                 list($b_cat, $b_sub) = explode(' > ', $b_type, 2);
                                 echo '<div class="biz-type-container">';
                                 echo '  <div><span class="badge bg-primary-subtle text-primary border border-primary-subtle">' . htmlspecialchars($b_cat) . '</span></div>';
@@ -336,7 +346,7 @@ $user_list = $users_stmt->fetchAll();
                                 <input type="hidden" name="target_user_id" value="<?= $u['id'] ?>">
                                 <input type="hidden" name="action" value="change_role">
                                 <select name="new_role" class="form-select form-select-sm role-select" onchange="this.form.submit()" <?= ((int)$u['id'] === (int)$user_id) ? 'title="본인 계정은 강등 불가"' : '' ?>>
-                                    <option value="USER" <?= $u['role'] === 'USER' ? 'selected' : '' ?>>일반회원 (USER)</option>
+                                    <option value="USER" <?= $u['role'] === 'USER' ? 'selected' : '' ?>>일반/개인 (USER)</option>
                                     <option value="STORE" <?= $u['role'] === 'STORE' ? 'selected' : '' ?>>사업자 (STORE)</option>
                                     <option value="ADMIN" <?= $u['role'] === 'ADMIN' ? 'selected' : '' ?>>최고관리자 (ADMIN)</option>
                                 </select>
@@ -416,12 +426,12 @@ $user_list = $users_stmt->fetchAll();
                             <input type="password" name="password" class="form-control" placeholder="비밀번호 입력" required>
                         </div>
                         <div class="col-md-6">
-                            <label class="form-label fw-bold small text-dark">점포명(상호명) <span class="text-danger">*</span></label>
-                            <input type="text" name="store_name" class="form-control" placeholder="점포명 입력" required>
+                            <label class="form-label fw-bold small text-dark">점포명 (또는 개인 성명) <span class="text-danger">*</span></label>
+                            <input type="text" name="store_name" class="form-control" placeholder="점포명 또는 개인 성명 입력" required>
                         </div>
                         <div class="col-md-6">
-                            <label class="form-label fw-bold small text-dark">대표자명</label>
-                            <input type="text" name="owner_name" class="form-control" placeholder="대표자 성함">
+                            <label class="form-label fw-bold small text-dark">대표자명 / 성명</label>
+                            <input type="text" name="owner_name" class="form-control" placeholder="성함">
                         </div>
                         <div class="col-md-6">
                             <label class="form-label fw-bold small text-dark">연락처</label>
@@ -432,8 +442,8 @@ $user_list = $users_stmt->fetchAll();
                             <input type="email" name="email" class="form-control" placeholder="email@example.com">
                         </div>
                         <div class="col-12">
-                            <label class="form-label fw-bold small text-dark">사업자등록번호</label>
-                            <input type="text" name="biz_no" class="form-control" placeholder="000-00-00000">
+                            <label class="form-label fw-bold small text-dark">사업자등록번호 (개인은 생략 가능)</label>
+                            <input type="text" name="biz_no" class="form-control" placeholder="000-00-00000 (개인 계정은 공란)">
                         </div>
 
                         <div class="col-md-6">
@@ -458,17 +468,17 @@ $user_list = $users_stmt->fetchAll();
                         </div>
                         <div class="col-12" id="add_custom_wrap" style="display: none;">
                             <label class="form-label fw-bold small text-primary"><i class="fa-solid fa-pen-nib me-1"></i>상세 업종 직접 입력</label>
-                            <input type="text" name="biz_custom" id="add_biz_custom" class="form-control border-primary" placeholder="구체적인 업종명 입력 (예: IT솔루션 및 웹서비스 개발)">
+                            <input type="text" name="biz_custom" id="add_biz_custom" class="form-control border-primary" placeholder="구체적인 업종명 입력 (예: 예비창업자 / 무인카페 준비)">
                         </div>
 
                         <div class="col-12">
-                            <label class="form-label fw-bold small text-dark">사업장 주소</label>
+                            <label class="form-label fw-bold small text-dark">사업장(거주) 주소</label>
                             <input type="text" name="address" class="form-control" placeholder="사업장 전체 주소">
                         </div>
                         <div class="col-md-6">
                             <label class="form-label fw-bold small text-dark">부여 권한</label>
                             <select name="role" class="form-select">
-                                <option value="USER">일반회원 (USER)</option>
+                                <option value="USER">일반/개인회원 (USER)</option>
                                 <option value="STORE" selected>사업자회원 (STORE)</option>
                                 <option value="ADMIN">최고관리자 (ADMIN)</option>
                             </select>
@@ -516,11 +526,11 @@ $user_list = $users_stmt->fetchAll();
                             <input type="password" name="new_password" class="form-control" placeholder="미입력 시 기존 비밀번호 유지">
                         </div>
                         <div class="col-md-6">
-                            <label class="form-label fw-bold small text-dark">점포명(상호명) <span class="text-danger">*</span></label>
+                            <label class="form-label fw-bold small text-dark">점포명 (또는 개인 성명) <span class="text-danger">*</span></label>
                             <input type="text" name="store_name" id="edit_store_name" class="form-control" required>
                         </div>
                         <div class="col-md-6">
-                            <label class="form-label fw-bold small text-dark">대표자명</label>
+                            <label class="form-label fw-bold small text-dark">대표자명 / 성명</label>
                             <input type="text" name="owner_name" id="edit_owner_name" class="form-control">
                         </div>
                         <div class="col-md-6">
@@ -532,7 +542,7 @@ $user_list = $users_stmt->fetchAll();
                             <input type="email" name="email" id="edit_email" class="form-control">
                         </div>
                         <div class="col-12">
-                            <label class="form-label fw-bold small text-dark">사업자등록번호</label>
+                            <label class="form-label fw-bold small text-dark">사업자등록번호 (개인은 생략 가능)</label>
                             <input type="text" name="biz_no" id="edit_biz_no" class="form-control">
                         </div>
 
@@ -562,13 +572,13 @@ $user_list = $users_stmt->fetchAll();
                         </div>
 
                         <div class="col-12">
-                            <label class="form-label fw-bold small text-dark">사업장 주소</label>
+                            <label class="form-label fw-bold small text-dark">사업장(거주) 주소</label>
                             <input type="text" name="address" id="edit_address" class="form-control">
                         </div>
                         <div class="col-md-6">
                             <label class="form-label fw-bold small text-dark">권한 (role)</label>
                             <select name="role" id="edit_role" class="form-select">
-                                <option value="USER">일반회원 (USER)</option>
+                                <option value="USER">일반/개인 (USER)</option>
                                 <option value="STORE">사업자회원 (STORE)</option>
                                 <option value="ADMIN">최고관리자 (ADMIN)</option>
                             </select>
@@ -612,7 +622,7 @@ $user_list = $users_stmt->fetchAll();
                     <h6 class="fw-bold text-dark mb-2">선택한 회원 계정을 완전히 삭제하시겠습니까?</h6>
                     <div class="p-3 bg-light rounded-3 text-start small text-secondary border mb-3">
                         <div><strong>아이디: </strong><span id="deleteUsername" class="text-dark fw-bold"></span></div>
-                        <div><strong>점포명: </strong><span id="deleteStoreName" class="text-dark fw-bold"></span></div>
+                        <div><strong>점포명/성명: </strong><span id="deleteStoreName" class="text-dark fw-bold"></span></div>
                     </div>
                     <p class="text-muted small mb-0">계정 삭제 시 연관된 모든 사업장, 분석 데이터가 복구 불가능하게 영구 삭제됩니다.</p>
                 </div>
@@ -643,6 +653,7 @@ function updateSubCategories(prefix, selectedSub = null) {
     const catSelect = document.getElementById(prefix + '_biz_category');
     const subSelect = document.getElementById(prefix + '_biz_sub');
     const customWrap = document.getElementById(prefix + '_custom_wrap');
+    if (!catSelect || !subSelect) return;
     
     const selectedCat = catSelect.value;
     subSelect.innerHTML = '<option value="">상세업종 선택</option>';
@@ -659,12 +670,12 @@ function updateSubCategories(prefix, selectedSub = null) {
         });
 
         if (selectedCat === "기타 업종" || subSelect.value === '직접입력') {
-            customWrap.style.display = 'block';
+            if (customWrap) customWrap.style.display = 'block';
         } else {
-            customWrap.style.display = 'none';
+            if (customWrap) customWrap.style.display = 'none';
         }
     } else {
-        customWrap.style.display = 'none';
+        if (customWrap) customWrap.style.display = 'none';
     }
 }
 
@@ -672,12 +683,13 @@ function checkCustomSub(prefix) {
     const subSelect = document.getElementById(prefix + '_biz_sub');
     const customWrap = document.getElementById(prefix + '_custom_wrap');
     const customInput = document.getElementById(prefix + '_biz_custom');
+    if (!subSelect || !customWrap) return;
 
     if (subSelect.value === '직접입력') {
         customWrap.style.display = 'block';
     } else {
         const catSelect = document.getElementById(prefix + '_biz_category');
-        if (catSelect.value !== '기타 업종') {
+        if (catSelect && catSelect.value !== '기타 업종') {
             customWrap.style.display = 'none';
             if (customInput) customInput.value = '';
         }
@@ -717,12 +729,12 @@ document.addEventListener("DOMContentLoaded", function() {
                 catSelect.value = mainCat;
                 if (bizData[mainCat] && bizData[mainCat].includes(subCat)) {
                     updateSubCategories('edit', subCat);
-                    customWrap.style.display = 'none';
-                    customInput.value = '';
+                    if (customWrap) customWrap.style.display = 'none';
+                    if (customInput) customInput.value = '';
                 } else {
                     updateSubCategories('edit', '직접입력');
-                    customWrap.style.display = 'block';
-                    customInput.value = subCat;
+                    if (customWrap) customWrap.style.display = 'block';
+                    if (customInput) customInput.value = subCat;
                 }
             } else if (fullBizType) {
                 catSelect.value = fullBizType;
@@ -731,8 +743,8 @@ document.addEventListener("DOMContentLoaded", function() {
                 } else {
                     catSelect.value = '기타 업종';
                     updateSubCategories('edit', '직접입력');
-                    customWrap.style.display = 'block';
-                    customInput.value = fullBizType;
+                    if (customWrap) customWrap.style.display = 'block';
+                    if (customInput) customInput.value = fullBizType;
                 }
             } else {
                 catSelect.value = '';

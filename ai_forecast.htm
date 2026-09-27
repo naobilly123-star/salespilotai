@@ -1,26 +1,9 @@
 <?php
-/* ========================================================================== */
-/* 🌤️ 메뉴 1: AI 날씨 및 상권 기반 수요 예측 리포트 (ai_forecast.htm) */
-/* - [Ubuntu 24.04 무중단 최적화] 세션 락 해제 & Open-Meteo API 파일 캐싱 */
-/* ========================================================================== */
-if (session_status() === PHP_SESSION_NONE) {
-    session_start();
-}
-ob_start();
-
+/* 🌤️ 메뉴 1: AI 날씨 및 상권 기반 수요 예측 리포트 (사용자 위치 기반 Open-Meteo API 연동 & Fallback) */
 require_once 'db.php';
-require_once 'api_cache_helper.php';
+require_once 'header.php';
 
-$user_id =$_SESSION['user_id'] ?? null;
-if (!$user_id) {
-    header("Location: login.htm");
-    exit;
-}
-
-// 단순 조회 페이지이므로 세션 락 즉시 해제
-releaseSessionLock();
-
-$today_date = date('Y-m-d');
+$user_id = $_SESSION['user_id'];$today_date = date('Y-m-d');
 
 /* 1. DB에서 현재 로그인한 사용자의 매장 주소 가져오기 및 위경도 매핑 */
 $latitude = 37.58;
@@ -35,44 +18,46 @@ try {
     if ($store_info && !empty($store_info['address'])) {
         $store_address =$store_info['address'];
 
-        // 지오코딩 캐싱 처리 (1주일)
-        $geo_cache_key = 'geo_coord_' . md5($store_address);$coord = getSafeCachedApiData($geo_cache_key, 604800, function() use ($store_address) {
-            $geo_query = urlencode(trim($store_address));
-            $geo_ch = curl_init("https://nominatim.openstreetmap.org/search?format=json&q={$geo_query}&limit=1");
-            curl_setopt_array($geo_ch, [
-                CURLOPT_RETURNTRANSFER => true,
-                CURLOPT_CONNECTTIMEOUT => 2,
-                CURLOPT_TIMEOUT => 2,
-                CURLOPT_USERAGENT => 'SmartStoreWeather/2.0 (SalesPilotAI)'
-            ]);
-            $geo_res = curl_exec($geo_ch);
-            curl_close($geo_ch);
+        $geo_resolved = false;
+        $geo_query = urlencode(trim($store_address));
+        $geo_ch = curl_init("https://nominatim.openstreetmap.org/search?format=json&q={$geo_query}&limit=1");
+        curl_setopt_array($geo_ch, [
+            CURLOPT_RETURNTRANSFER => true,
+            CURLOPT_CONNECTTIMEOUT => 2,
+            CURLOPT_TIMEOUT => 2,
+            CURLOPT_USERAGENT => 'SmartStoreWeather/2.0 (WeatherForecastBot)'
+        ]);
+        $geo_res = curl_exec($geo_ch);
+        $geo_code = curl_getinfo($geo_ch, CURLINFO_HTTP_CODE);
+        curl_close($geo_ch);
 
-            if (!empty($geo_res)) {
-                $geo_data = json_decode($geo_res, true);
-                if (!empty($geo_data[0]['lat']) && !empty($geo_data[0]['lon'])) {
-                    return [
-                        'lat' => round(floatval($geo_data[0]['lat']), 4),                         'lon' => round(floatval($geo_data[0]['lon']), 4)
-                    ];
-                }
+        if ($geo_code === 200 && !empty($geo_res)) {
+            $geo_data = json_decode($geo_res, true);
+            if (!empty($geo_data[0]['lat']) && !empty($geo_data[0]['lon'])) {$latitude = round(floatval($geo_data[0]['lat']), 4);$longitude = round(floatval($geo_data[0]['lon']), 4);$geo_resolved = true;
             }
-            return null;
-        });
+        }
 
-        if (!empty($coord)) {
-            $latitude =$coord['lat'];
-            $longitude =$coord['lon'];
-        } else {
+        if (!$geo_resolved) {
             if (mb_strpos($store_address, '부산') !== false) {
-                $latitude = 35.1795; $longitude = 129.0756;             } elseif (mb_strpos($store_address, '대구') !== false) {
-                $latitude = 35.8714; $longitude = 128.6014;             } elseif (mb_strpos($store_address, '인천') !== false) {
-                $latitude = 37.4563; $longitude = 126.7052;             } elseif (mb_strpos($store_address, '광주') !== false) {
-                $latitude = 35.1595; $longitude = 126.8526;             } elseif (mb_strpos($store_address, '대전') !== false) {
-                $latitude = 36.3504; $longitude = 127.3845;             } elseif (mb_strpos($store_address, '울산') !== false) {
-                $latitude = 35.5384; $longitude = 129.3114;             } elseif (mb_strpos($store_address, '제주') !== false) {
+                $latitude = 35.1795; $longitude = 129.0756;
+            } elseif (mb_strpos($store_address, '대구') !== false) {
+                $latitude = 35.8714; $longitude = 128.6014;
+            } elseif (mb_strpos($store_address, '인천') !== false) {
+                $latitude = 37.4563; $longitude = 126.7052;
+            } elseif (mb_strpos($store_address, '광주') !== false) {
+                $latitude = 35.1595; $longitude = 126.8526;
+            } elseif (mb_strpos($store_address, '대전') !== false) {
+                $latitude = 36.3504; $longitude = 127.3845;
+            } elseif (mb_strpos($store_address, '울산') !== false) {
+                $latitude = 35.5384; $longitude = 129.3114;
+            } elseif (mb_strpos($store_address, '제주') !== false) {
                 $latitude = 33.4996; $longitude = 126.5312;
-            } elseif (mb_strpos($store_address, '강원') !== false \vert{}\vert{} mb_strpos($store_address, '춘천') !== false) {
-                $latitude = 37.8853; $longitude = 127.7298;             }         }     } } catch (PDOException$e) {}
+            } elseif (mb_strpos($store_address, '강원') !== false || mb_strpos($store_address, '춘천') !== false) {
+                $latitude = 37.8853; $longitude = 127.7298;
+            }
+        }
+    }
+} catch (PDOException$e) {}
 
 $is_api_connected = false;
 $api_status_msg = "시뮬레이션 모드 (API 키 미설정/통신대기)";
@@ -82,9 +67,8 @@ $temp_high = 24;
 $temp_low = 18;
 $pop_rain_rate = 80;
 
-// 날씨 데이터 캐싱 (15분 = 900초)
-$weather_cache_key = "weather_{$latitude}_{$longitude}";
-$weather_data = getSafeCachedApiData($weather_cache_key, 900, function() use ($latitude, $longitude) {$api_url = "https://api.open-meteo.com/v1/forecast"
+try {
+    $api_url = "https://api.open-meteo.com/v1/forecast"
              . "?latitude={$latitude}&longitude={$longitude}"
              . "&current=temperature_2m,weather_code"
              . "&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max"
@@ -94,40 +78,40 @@ $weather_data = getSafeCachedApiData($weather_cache_key, 900, function() use ($l
     curl_setopt_array($ch, [
         CURLOPT_URL => $api_url,
         CURLOPT_RETURNTRANSFER => true,
-        CURLOPT_CONNECTTIMEOUT => 2,
+        CURLOPT_CONNECTTIMEOUT => 3,
         CURLOPT_TIMEOUT => 3,
         CURLOPT_USERAGENT => 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'
     ]);
+
     $response = curl_exec($ch);
     $http_code = curl_getinfo($ch, CURLINFO_HTTP_CODE);
     curl_close($ch);
 
     if ($http_code === 200 && !empty($response)) {
-        return json_decode($response, true);
-    }
-    return null;
-});
+        $json_data = json_decode($response, true);
+        
+        if (isset($json_data['current']) || isset($json_data['daily'])) {$weather_code = intval($json_data['current']['weather_code'] ?? ($json_data['daily']['weather_code'][0] ?? 0));
+            $current_temp = round(floatval($json_data['current']['temperature_2m'] ?? 20));
 
-if (!empty($weather_data)) {
-    if (isset($weather_data['current']) || isset($weather_data['daily'])) {$weather_code = intval($weather_data['current']['weather_code'] ?? ($weather_data['daily']['weather_code'][0] ?? 0));
-        $current_temp = round(floatval($weather_data['current']['temperature_2m'] ?? 20));
+            if (isset($json_data['daily']['temperature_2m_max'][0])) {
+                $temp_high = round(floatval($json_data['daily']['temperature_2m_max'][0]));
+                $temp_low = round(floatval($json_data['daily']['temperature_2m_min'][0]));
+                $pop_rain_rate = intval($json_data['daily']['precipitation_probability_max'][0] ?? 0);
+            }
 
-        if (isset($weather_data['daily']['temperature_2m_max'][0])) {
-            $temp_high = round(floatval($weather_data['daily']['temperature_2m_max'][0]));
-            $temp_low = round(floatval($weather_data['daily']['temperature_2m_min'][0]));
-            $pop_rain_rate = intval($weather_data['daily']['precipitation_probability_max'][0] ?? 0);
+            if (in_array($weather_code, [51, 53, 55, 56, 57, 61, 63, 65, 66, 67, 80, 81, 82, 95, 96, 99])) {$forecast_weather = 'Rainy';
+            } elseif (in_array($weather_code, [71, 73, 75, 77, 85, 86])) {$forecast_weather = 'Snow';
+            } elseif (in_array($weather_code, [1, 2, 3, 45, 48])) {$forecast_weather = 'Cloudy';
+            } else {
+                $forecast_weather = 'Clear';
+            }
+
+            $is_api_connected = true;
+            $api_status_msg = "Open-Meteo 실시간 날씨 연동 완료";
         }
-
-        if (in_array($weather_code, [51, 53, 55, 56, 57, 61, 63, 65, 66, 67, 80, 81, 82, 95, 96, 99])) {$forecast_weather = 'Rainy';
-        } elseif (in_array($weather_code, [71, 73, 75, 77, 85, 86])) {$forecast_weather = 'Snow';
-        } elseif (in_array($weather_code, [1, 2, 3, 45, 48])) {$forecast_weather = 'Cloudy';
-        } else {
-            $forecast_weather = 'Clear';
-        }
-
-        $is_api_connected = true;
-        $api_status_msg = "Open-Meteo 실시간 날씨 연동 완료";
     }
+} catch (Exception $e) {$is_api_connected = false;
+    $api_status_msg = "API 통신 오류 - 가상 데이터 모드 전환";
 }
 
 if ($forecast_weather === 'Rainy') {$delivery_change = 28.5;
@@ -152,8 +136,6 @@ if ($forecast_weather === 'Rainy') {$delivery_change = 28.5;
     $weather_icon = "fa-sun text-warning";
     $weather_kr = "맑음";
 }
-
-require_once 'header.php';
 ?>
 
 <style>
@@ -275,7 +257,7 @@ require_once 'header.php';
     </div>
 </div>
 
-<!-- GPS/위치 알림 전용 모달 -->
+<!-- GPS/위치 알림 전용 모달 (Alert 대체) -->
 <div class="modal fade" id="locationAlertModal" tabindex="-1" aria-hidden="true">
     <div class="modal-dialog modal-dialog-centered modal-sm">
         <div class="modal-content border-0 shadow-lg rounded-4 overflow-hidden">

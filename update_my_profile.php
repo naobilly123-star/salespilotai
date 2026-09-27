@@ -1,115 +1,108 @@
 <?php
-/* 회원 본인 정보 수정 독립 처리 엔드포인트 */
+/* ========================================================================== */
+/* 👤 본인 정보 실시간 수정 비동기(AJAX) 처리 엔진 (update_my_profile.php) */
+/* - 개인(예비창업자) 및 사업자 회원 투트랙 완벽 지원 */
+/* ========================================================================== */
 if (session_status() === PHP_SESSION_NONE) {
     session_start();
 }
-
-require_once 'db.php';
+ob_start();
 
 header('Content-Type: application/json; charset=utf-8');
+require_once 'db.php';
 
 if (!isset($_SESSION['user_id'])) {
-    echo json_encode(['status' => 'error', 'message' => '로그인이 필요합니다.']);
+    echo json_encode(['status' => 'error', 'message' => '로그인이 필요합니다.'], JSON_UNESCAPED_UNICODE);
     exit;
 }
 
 $user_id = (int)$_SESSION['user_id'];
 
-if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
-    echo json_encode(['status' => 'error', 'message' => '잘못된 접근 방식입니다.']);
-    exit;
-}
+if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+    $store_name = trim($_POST['my_store_name'] ?? '');
+    $owner_name = trim($_POST['my_owner_name'] ?? '');
+    $phone      = trim($_POST['my_phone'] ?? '');
+    $email      = trim($_POST['my_email'] ?? '');
+    $biz_no     = trim($_POST['my_biz_no'] ?? '');
+    $address    = trim($_POST['my_address'] ?? '');
+    $new_pwd    = $_POST['my_new_password'] ?? '';
 
-$my_store_name   = trim($_POST['my_store_name'] ?? '');
-$my_owner_name   = trim($_POST['my_owner_name'] ?? '');
-$my_phone        = trim($_POST['my_phone'] ?? '');
-$my_email        = trim($_POST['my_email'] ?? '');
-$my_biz_no       = trim($_POST['my_biz_no'] ?? '');
-$my_address      = trim($_POST['my_address'] ?? '');
-$my_new_password = $_POST['my_new_password'] ?? '';
+    $biz_category = trim($_POST['my_biz_category'] ?? '');
+    $biz_sub      = trim($_POST['my_biz_sub'] ?? '');
+    $biz_custom   = trim($_POST['my_biz_custom'] ?? '');
 
-$my_biz_category = trim($_POST['my_biz_category'] ?? '');
-$my_biz_sub      = trim($_POST['my_biz_sub'] ?? '');
-$my_biz_custom   = trim($_POST['my_biz_custom'] ?? '');
+    // 현재 사용자 기존 정보 조회
+    $u_chk = $pdo->prepare("SELECT role, biz_type, store_name FROM users WHERE id = :id LIMIT 1");
+    $u_chk->execute(['id' => $user_id]);
+    $curr_u = $u_chk->fetch(PDO::FETCH_ASSOC);
 
-if ($my_biz_sub === '직접입력' || $my_biz_category === '기타 업종') {
-    $final_sub = !empty($my_biz_custom) ? $biz_custom : '기타상세';
-    $my_biz_type = $my_biz_category . ' > ' . $final_sub;
-} elseif (!empty($my_biz_category) && !empty($my_biz_sub)) {
-    $my_biz_type = $my_biz_category . ' > ' . $my_biz_sub;
-} else {
-    $my_biz_type = !empty($my_biz_category) ? $my_biz_category : '기타/미지정';
-}
+    $is_personal = ($curr_u && (strpos($curr_u['biz_type'], '예비창업') !== false || $curr_u['role'] === 'USER' && empty($biz_no)));
 
-if (empty($my_store_name)) {
-    echo json_encode(['status' => 'error', 'message' => '상호명(점포명)은 필수 입력 항목입니다.']);
-    exit;
-}
-
-try {
-    // 1. users 테이블 갱신
-    if (!empty($my_new_password)) {
-        $hashed_pwd = password_hash($my_new_password, PASSWORD_DEFAULT);
-        $upd_stmt = $pdo->prepare("
-            UPDATE users 
-            SET store_name = :store_name, owner_name = :owner_name, phone = :phone, 
-                email = :email, biz_no = :biz_no, biz_type = :biz_type, 
-                address = :address, password = :password 
-            WHERE id = :id
-        ");
-        $upd_stmt->execute([
-            'store_name' => $my_store_name,
-            'owner_name' => $my_owner_name,
-            'phone'      => $my_phone,
-            'email'      => $my_email,
-            'biz_no'     => $my_biz_no,
-            'biz_type'   => $my_biz_type,
-            'address'    => $my_address,
-            'password'   => $hashed_pwd,
-            'id'         => $user_id
-        ]);
+    if ($is_personal && empty($biz_category)) {
+        $biz_type = !empty($curr_u['biz_type']) ? $curr_u['biz_type'] : '예비창업/개인 시뮬레이션';
     } else {
-        $upd_stmt = $pdo->prepare("
-            UPDATE users 
-            SET store_name = :store_name, owner_name = :owner_name, phone = :phone, 
-                email = :email, biz_no = :biz_no, biz_type = :biz_type, 
-                address = :address 
-            WHERE id = :id
-        ");
-        $upd_stmt->execute([
-            'store_name' => $my_store_name,
-            'owner_name' => $my_owner_name,
-            'phone'      => $my_phone,
-            'email'      => $my_email,
-            'biz_no'     => $my_biz_no,
-            'biz_type'   => $my_biz_type,
-            'address'    => $my_address,
-            'id'         => $user_id
-        ]);
+        if ($biz_sub === '직접입력' || $biz_category === '기타 업종') {
+            $final_sub = !empty($biz_custom) ? $biz_custom : '기타상세';
+            $biz_type  = $biz_category . ' > ' . $final_sub;
+        } elseif (!empty($biz_category) && !empty($biz_sub)) {
+            $biz_type  = $biz_category . ' > ' . $biz_sub;
+        } else {
+            $biz_type  = !empty($biz_category) ? $biz_category : ($curr_u['biz_type'] ?? '기타/미지정');
+        }
     }
 
-    // 2. stores 테이블 동기화
+    if (empty($store_name)) {
+        echo json_encode(['status' => 'error', 'message' => ($is_personal ? '성명(이름)을 입력해주세요.' : '점포명(상호명)을 입력해주세요.')], JSON_UNESCAPED_UNICODE);
+        exit;
+    }
+
     try {
-        $chk_store = $pdo->prepare("SELECT id FROM stores WHERE user_id = :uid LIMIT 1");
-        $chk_store->execute(['uid' => $user_id]);
-        if ($chk_store->fetch()) {
-            $upd_s = $pdo->prepare("UPDATE stores SET store_name = :sname, biz_no = :bno, address = :addr WHERE user_id = :uid");
-            $upd_s->execute([
-                'sname' => $my_store_name,
-                'bno'   => $my_biz_no,
-                'addr'  => $my_address,
-                'uid'   => $user_id
-            ]);
+        if (!empty($new_pwd)) {
+            $hashed = password_hash($new_pwd, PASSWORD_DEFAULT);
+            $sql = "UPDATE users 
+                    SET store_name = :store_name, owner_name = :owner_name, phone = :phone, email = :email, 
+                        biz_no = :biz_no, biz_type = :biz_type, address = :address, password = :password 
+                    WHERE id = :id";
+            $params = [
+                'store_name' => $store_name,
+                'owner_name' => $owner_name,
+                'phone'      => $phone,
+                'email'      => $email,
+                'biz_no'     => $biz_no,
+                'biz_type'   => $biz_type,
+                'address'    => $address,
+                'password'   => $hashed,
+                'id'         => $user_id
+            ];
+        } else {
+            $sql = "UPDATE users 
+                    SET store_name = :store_name, owner_name = :owner_name, phone = :phone, email = :email, 
+                        biz_no = :biz_no, biz_type = :biz_type, address = :address 
+                    WHERE id = :id";
+            $params = [
+                'store_name' => $store_name,
+                'owner_name' => $owner_name,
+                'phone'      => $phone,
+                'email'      => $email,
+                'biz_no'     => $biz_no,
+                'biz_type'   => $biz_type,
+                'address'    => $address,
+                'id'         => $user_id
+            ];
         }
-    } catch (\Throwable $exStore) {}
 
-    // 세션 상호명 동기화
-    $_SESSION['store_name'] = $my_store_name;
+        $stmt = $pdo->prepare($sql);
+        $stmt->execute($params);
 
-    echo json_encode(['status' => 'success', 'message' => '회원 정보가 성공적으로 수정되었습니다.']);
-    exit;
+        $_SESSION['store_name'] = $store_name;
 
-} catch (\PDOException $e) {
-    echo json_encode(['status' => 'error', 'message' => '데이터베이스 처리 오류: ' . $e->getMessage()]);
+        echo json_encode([
+            'status' => 'success',
+            'message' => '회원 정보가 성공적으로 수정되었습니다.'
+        ], JSON_UNESCAPED_UNICODE);
+    } catch (PDOException $e) {
+        error_log("Update Profile Error: " . $e->getMessage());
+        echo json_encode(['status' => 'error', 'message' => '데이터베이스 처리 중 오류가 발생했습니다.'], JSON_UNESCAPED_UNICODE);
+    }
     exit;
 }
