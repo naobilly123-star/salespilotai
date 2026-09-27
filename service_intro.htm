@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>서비스 소개 | 나오빌리</title>
+    <title>서비스 소개 | BizProfit AI</title>
     <!-- Bootstrap 5 CSS -->
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <!-- FontAwesome Icons -->
@@ -11,7 +11,6 @@
     <!-- Pretendard WebFont -->
     <link rel="stylesheet" as="style" crossorigin href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.min.css" />
 
-    <!-- [REFACTORED - SaaS 서비스 소개 현대화 스타일링] -->
     <style>
         body {
             background-color: #f8fafc;
@@ -102,7 +101,6 @@
             border: 1px solid rgba(255, 255, 255, 0.08);
         }
 
-        /* 모달 내부 팝업 화면 볼 때 여백 최적화 */
         body.in-modal-mode .navbar {
             display: none !important;
         }
@@ -138,7 +136,6 @@
             }
         }
 
-        /* 인쇄(Print) 시 최적화 */
         @media print {
             @page {
                 size: A4;
@@ -180,7 +177,7 @@
 <nav class="navbar navbar-expand-lg bg-white border-bottom sticky-top py-3">
     <div class="container" style="max-width: 1040px;">
         <a class="navbar-brand fw-bold text-primary d-flex align-items-center" href="/" target="_top">
-            <i class="fa-solid fa-chart-pie me-2 fs-4"></i> 나오빌리
+            <i class="fa-solid fa-chart-line me-2 fs-4"></i> BizProfit AI
         </a>
         <div class="d-flex align-items-center gap-2">
             <a href="/" target="_top" class="btn btn-outline-secondary btn-sm rounded-pill px-3">
@@ -199,7 +196,7 @@
             <i class="fa-solid fa-bolt text-warning me-1"></i> 소상공인을 위한 차세대 정산 인텔리전스
         </span>
         <h1 class="display-6 fw-bold mb-3">
-            통장에 진짜 남는 돈,<br><strong>나오빌리</strong>가 1원 단위까지 정산합니다
+            통장에 진짜 남는 돈,<br><strong>BizProfit AI</strong>가 1원 단위까지 정산합니다
         </h1>
         <p class="lead mb-4 text-white-50 small" style="font-size: 1.05rem;">
             화려한 겉보기 매출에 속지 마세요. 국세청 매출과 복잡한 배달 3사 수수료, 고정비까지 자동 연동하여 
@@ -251,7 +248,7 @@
             <span class="badge bg-primary-subtle text-primary border border-primary-subtle rounded-pill px-3 py-1 mb-2">
                 Flow Architecture
             </span>
-            <h3 class="fw-bold text-dark mb-2">나오빌리의 4단계 실시간 손익 계산 엔진</h3>
+            <h3 class="fw-bold text-dark mb-2">BizProfit AI의 4단계 실시간 손익 계산 엔진</h3>
             <p class="text-muted small">매출 발생부터 통장에 꽂히는 순수익까지 논리적으로 계산합니다.</p>
         </div>
 
@@ -312,7 +309,7 @@
                 금융권 수준의 데이터 암호화 및<br>실시간 모니터링 환경
             </h3>
             <p class="text-secondary small mb-3">
-                나오빌리는 사장님의 소중한 매출 및 정산 정보를 안전하게 보호하기 위해 <strong>네이버클라우드(주)</strong>의 공인 엔터프라이즈 인프라 위에서 운용됩니다.
+                BizProfit AI는 사장님의 소중한 매출 및 정산 정보를 안전하게 보호하기 위해 <strong>네이버클라우드(주)</strong>의 공인 엔터프라이즈 인프라 위에서 운용됩니다.
             </p>
             <ul class="list-unstyled text-muted small mb-4">
                 <li class="mb-2"><i class="fa-solid fa-circle-check text-primary me-2"></i>모든 API 통신 구간 SSL 고도화 암호화 적용</li>
@@ -335,9 +332,9 @@
     </div>
 
     <div class="cta-box shadow-lg">
-        <h2 class="fw-bold mb-3">지금 바로 나오빌리와 함께 진짜 순이익을 확인하세요</h2>
+        <h2 class="fw-bold mb-3">지금 바로 BizProfit AI와 함께 진짜 순이익을 확인하세요</h2>
         <p class="text-white-50 mb-4 small" style="font-size: 1rem;">
-            복잡한 계산기는 이제 내려놓으세요. 나오빌리의 AI가 사장님의 성공적인 매장 운영을 함께합니다.
+            복잡한 계산기는 이제 내려놓으세요. BizProfit AI(운영사: 나오빌리)가 사장님의 성공적인 매장 운영을 함께합니다.
         </p>
         <div class="d-flex justify-content-center gap-3 flex-wrap">
             <a href="/dashboard.htm" target="_top" class="btn btn-primary btn-lg rounded-pill px-4 fw-bold">
@@ -358,7 +355,6 @@
 </div>
 
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
-
 <script>
     if (window.self !== window.top) {
         document.body.classList.add('in-modal-mode');
@@ -366,10 +362,9 @@
         if (footerWrap) footerWrap.style.display = 'none';
     }
 		
-    // [로더 100% 해제 안전장치]
     if (window.AppLoader && typeof window.AppLoader.hide === 'function') window.AppLoader.hide();
     if (window.parent && window.parent.AppLoader && typeof window.parent.AppLoader.hide === 'function') window.parent.AppLoader.hide();
-
+	
     if (window.self !== window.top) {
         document.body.classList.add('in-modal-mode');
         // service_intro.htm의 경우 푸터 래퍼 숨김 처리 유지
