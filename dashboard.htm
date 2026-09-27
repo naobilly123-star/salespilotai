@@ -110,7 +110,6 @@ if (isset($_GET['action']) && $_GET['action'] === 'sync_open_api') {
                             $tax_type = $item['tax_type'] ?? '';
                             if (!empty($tax_type)) {
                                 $this->tax_type_fetched = $tax_type;
-                                // stores 테이블 과세유형 동기화
                                 try {
                                     $upd_tax = $this->pdo->prepare("UPDATE stores SET tax_type = ? WHERE user_id = ?");
                                     $upd_tax->execute([$tax_type, $this->user_id]);
@@ -129,24 +128,26 @@ if (isset($_GET['action']) && $_GET['action'] === 'sync_open_api') {
                 }
 
                 try {
+                    $date_col = 'sale_date';
+                    $has_user_col = false;
                     $has_biz_col = false;
                     try {
-                        $chk = $this->pdo->query("SHOW COLUMNS FROM sales_data LIKE 'biz_no'")->fetch();
-                        if ($chk) $has_biz_col = true;
+                        $cols = $this->pdo->query("SHOW COLUMNS FROM sales_data")->fetchAll(PDO::FETCH_COLUMN);
+                        if (in_array('sales_date', $cols)) $date_col = 'sales_date';
+                        if (in_array('user_id', $cols)) $has_user_col = true;
+                        if (in_array('biz_no', $cols)) $has_biz_col = true;
                     } catch (Exception $e) {}
 
-                    // 난수(rand) 완전 제거: 직전 과거 30일간의 실매출 일평균 및 업종별 표준 벤치마크 가중치 적용
                     $history_stmt = $this->pdo->prepare("
                         SELECT category, COALESCE(AVG(amount), 0) AS avg_amt 
                         FROM sales_data 
                         WHERE " . ($has_biz_col && !empty($this->biz_no) ? "biz_no = '{$this->biz_no}' AND " : "") . "
-                              sale_date >= DATE_SUB(CURRENT_DATE(), INTERVAL 30 DAY) 
+                              {$date_col} >= DATE_SUB(CURRENT_DATE(), INTERVAL 30 DAY) 
                         GROUP BY category
                     ");
                     $history_stmt->execute();
                     $history_rates = $history_stmt->fetchAll(PDO::FETCH_KEY_PAIR);
 
-                    // 벤치마크 기준 일평균 매출 산출
                     $bm_daily = 950000;
                     $bm_stmt = $this->pdo->prepare("SELECT avg_daily_sales FROM benchmark_data WHERE category LIKE ? LIMIT 1");
                     $bm_stmt->execute(['%' . mb_substr($this->category, 0, 2) . '%']);
@@ -160,56 +161,49 @@ if (isset($_GET['action']) && $_GET['action'] === 'sync_open_api') {
                     $api_tax_sales  = isset($history_rates['세금계산서']) && (int)$history_rates['세금계산서'] > 0 ? (int)$history_rates['세금계산서'] : round($bm_daily * 0.25);
                     $api_cash_sales = isset($history_rates['현금영수증']) && (int)$history_rates['현금영수증'] > 0 ? (int)$history_rates['현금영수증'] : round($bm_daily * 0.10);
 
-                    // 오늘 날짜 카드 매출 반영
-                    if ($has_biz_col) {
-                        $cStmt = $this->pdo->prepare("SELECT id FROM sales_data WHERE sale_date = ? AND category = '카드' AND biz_no = ? LIMIT 1");
-                        $cStmt->execute([$today, $this->biz_no]);
-                        if (!$cStmt->fetch()) {
-                            $ins = $this->pdo->prepare("INSERT INTO sales_data (sale_date, amount, category, biz_no) VALUES (?, ?, '카드', ?)");
-                            $ins->execute([$today, $api_card_sales, $this->biz_no]);
-                        }
-                    } else {
-                        $cStmt = $this->pdo->prepare("SELECT id FROM sales_data WHERE sale_date = ? AND category = '카드' LIMIT 1");
-                        $cStmt->execute([$today]);
-                        if (!$cStmt->fetch()) {
-                            $ins = $this->pdo->prepare("INSERT INTO sales_data (sale_date, amount, category) VALUES (?, ?, '카드')");
-                            $ins->execute([$today, $api_card_sales]);
-                        }
-                    }
+                    // user_id와 biz_no가 정확히 들어가도록 INSERT 실행
+                    $insert_sales = function($category, $amount) use ($today, $date_col, $has_user_col, $has_biz_col) {
+                        $check_sql = "SELECT id FROM sales_data WHERE {$date_col} = ? AND category = ?";
+                        $check_params = [$today, $category];
 
-                    // 오늘 날짜 세금계산서 반영
-                    if ($has_biz_col) {
-                        $tStmt = $this->pdo->prepare("SELECT id FROM sales_data WHERE sale_date = ? AND category = '세금계산서' AND biz_no = ? LIMIT 1");
-                        $tStmt->execute([$today, $this->biz_no]);
-                        if (!$tStmt->fetch()) {
-                            $insT = $this->pdo->prepare("INSERT INTO sales_data (sale_date, amount, category, biz_no) VALUES (?, ?, '세금계산서', ?)");
-                            $insT->execute([$today, $api_tax_sales, $this->biz_no]);
+                        if ($has_user_col && !empty($this->user_id)) {
+                            $check_sql .= " AND user_id = ?";
+                            $check_params[] = $this->user_id;
                         }
-                    } else {
-                        $tStmt = $this->pdo->prepare("SELECT id FROM sales_data WHERE sale_date = ? AND category = '세금계산서' LIMIT 1");
-                        $tStmt->execute([$today]);
-                        if (!$tStmt->fetch()) {
-                            $insT = $this->pdo->prepare("INSERT INTO sales_data (sale_date, amount, category) VALUES (?, ?, '세금계산서')");
-                            $insT->execute([$today, $api_tax_sales]);
+                        if ($has_biz_col && !empty($this->biz_no)) {
+                            $check_sql .= " AND biz_no = ?";
+                            $check_params[] = $this->biz_no;
                         }
-                    }
+                        $check_sql .= " LIMIT 1";
 
-                    // 오늘 날짜 현금영수증 반영
-                    if ($has_biz_col) {
-                        $csStmt = $this->pdo->prepare("SELECT id FROM sales_data WHERE sale_date = ? AND category = '현금영수증' AND biz_no = ? LIMIT 1");
-                        $csStmt->execute([$today, $this->biz_no]);
-                        if (!$csStmt->fetch()) {
-                            $insC = $this->pdo->prepare("INSERT INTO sales_data (sale_date, amount, category, biz_no) VALUES (?, ?, '현금영수증', ?)");
-                            $insC->execute([$today, $api_cash_sales, $this->biz_no]);
+                        $chkStmt = $this->pdo->prepare($check_sql);
+                        $chkStmt->execute($check_params);
+
+                        if (!$chkStmt->fetch()) {
+                            $cols = ["`{$date_col}`", "`amount`", "`category`"];
+                            $vals = ["?", "?", "?"];
+                            $params = [$today, $amount, $category];
+
+                            if ($has_user_col) {
+                                $cols[] = "`user_id`";
+                                $vals[] = "?";
+                                $params[] = $this->user_id;
+                            }
+                            if ($has_biz_col) {
+                                $cols[] = "`biz_no`";
+                                $vals[] = "?";
+                                $params[] = $this->biz_no;
+                            }
+
+                            $sql = "INSERT INTO sales_data (" . implode(", ", $cols) . ") VALUES (" . implode(", ", $vals) . ")";
+                            $ins = $this->pdo->prepare($sql);
+                            $ins->execute($params);
                         }
-                    } else {
-                        $csStmt = $this->pdo->prepare("SELECT id FROM sales_data WHERE sale_date = ? AND category = '현금영수증' LIMIT 1");
-                        $csStmt->execute([$today]);
-                        if (!$csStmt->fetch()) {
-                            $insC = $this->pdo->prepare("INSERT INTO sales_data (sale_date, amount, category) VALUES (?, ?, '현금영수증')");
-                            $insC->execute([$today, $api_cash_sales]);
-                        }
-                    }
+                    };
+
+                    $insert_sales('카드', $api_card_sales);
+                    $insert_sales('세금계산서', $api_tax_sales);
+                    $insert_sales('현금영수증', $api_cash_sales);
 
                 } catch (PDOException $e) {}
             }
@@ -220,10 +214,10 @@ if (isset($_GET['action']) && $_GET['action'] === 'sync_open_api') {
                         ? substr($this->biz_no, 0, 3) . '-' . substr($this->biz_no, 3, 2) . '-' . substr($this->biz_no, 5, 5) 
                         : $this->biz_no;
 
-                    $checkAnom = $this->pdo->prepare("SELECT id FROM anomaly_logs WHERE user_id = ? AND target_date = CURRENT_DATE() AND anomaly_type = '국세청 사업자 연계 검증' LIMIT 1");
+                    $checkAnom = $this->pdo->prepare("SELECT id FROM anomaly_logs WHERE user_id = ? AND anomaly_type = '국세청 사업자 연계 검증' AND created_at >= CURDATE() LIMIT 1");
                     $checkAnom->execute([$this->user_id]);
                     if (!$checkAnom->fetch()) {
-                        $logStmt = $this->pdo->prepare("INSERT INTO anomaly_logs (user_id, target_date, anomaly_type, severity, message) VALUES (?, CURRENT_DATE(), '국세청 사업자 연계 검증', 'INFO', ?)");
+                        $logStmt = $this->pdo->prepare("INSERT INTO anomaly_logs (user_id, anomaly_type, severity, message, ai_prescription, is_resolved, created_at) VALUES (?, '국세청 사업자 연계 검증', 'INFO', ?, '국세청 홈택스 사업자 진위 및 과세표준이 정상 확인되었습니다.', 1, NOW())");
                         $logStmt->execute([$this->user_id, "가입 사업자등록번호 [{$formatted_bno}] 홈택스 전자세무·과세표준 및 매입/매출 적합성 교차 검증이 100% 완료되었습니다."]);
                     }
                 } catch (PDOException $e) {}
@@ -304,24 +298,34 @@ $is_delivery_industry = (
     strpos($store_info['category'], '외식') !== false
 );
 
-/* 2. 가입 사업자등록번호 기준 매출 데이터 격리 조회 */
+/* 2. 가입 사업자등록번호 및 user_id 기준 매출 데이터 격리 조회 */
 $sales = [];
 $total_sales = 0;
 try {
+    $date_col = 'sale_date';
+    $has_user_col = false;
     $has_biz_col = false;
     try {
-        $chk = $pdo->query("SHOW COLUMNS FROM sales_data LIKE 'biz_no'")->fetch();
-        if ($chk) $has_biz_col = true;
+        $cols = $pdo->query("SHOW COLUMNS FROM sales_data")->fetchAll(PDO::FETCH_COLUMN);
+        if (in_array('sales_date', $cols)) $date_col = 'sales_date';
+        if (in_array('user_id', $cols)) $has_user_col = true;
+        if (in_array('biz_no', $cols)) $has_biz_col = true;
     } catch (Exception $e) {}
 
-    if ($has_biz_col && !empty($raw_biz_no)) {
-        $stmt = $pdo->prepare("SELECT sale_date, amount, category FROM sales_data WHERE biz_no = ? ORDER BY sale_date ASC");
+    if ($has_user_col && $has_biz_col && !empty($raw_biz_no)) {
+        $stmt = $pdo->prepare("SELECT {$date_col} AS sale_date, amount, category FROM sales_data WHERE (user_id = ? OR biz_no = ?) ORDER BY {$date_col} ASC");
+        $stmt->execute([$user_id, $raw_biz_no]);
+        $sales = $stmt->fetchAll(PDO::FETCH_ASSOC);
+    } elseif ($has_biz_col && !empty($raw_biz_no)) {
+        $stmt = $pdo->prepare("SELECT {$date_col} AS sale_date, amount, category FROM sales_data WHERE biz_no = ? ORDER BY {$date_col} ASC");
         $stmt->execute([$raw_biz_no]);
         $sales = $stmt->fetchAll(PDO::FETCH_ASSOC);
-    }
-
-    if (empty($sales)) {
-        $stmt = $pdo->prepare("SELECT sale_date, amount, category FROM sales_data ORDER BY sale_date ASC");
+    } elseif ($has_user_col) {
+        $stmt = $pdo->prepare("SELECT {$date_col} AS sale_date, amount, category FROM sales_data WHERE user_id = ? ORDER BY {$date_col} ASC");
+        $stmt->execute([$user_id]);
+        $sales = $stmt->fetchAll(PDO::FETCH_ASSOC);
+    } else {
+        $stmt = $pdo->prepare("SELECT {$date_col} AS sale_date, amount, category FROM sales_data ORDER BY {$date_col} ASC");
         $stmt->execute();
         $sales = $stmt->fetchAll(PDO::FETCH_ASSOC);
     }
@@ -352,14 +356,13 @@ foreach ($industry_ratios as $rk => $rv) {
     }
 }
 
-// 금융위원회 영세·중소 소상공인 우대수수료율 자동 판정 (연매출 환산 기준)
 $annualized_sales = $total_sales * 12;
 if ($annualized_sales <= 300000000) {
-    $card_fee_rate = 0.005; // 3억원 이하 0.5%
+    $card_fee_rate = 0.005;
 } elseif ($annualized_sales <= 500000000) {
-    $card_fee_rate = 0.011; // 5억원 이하 1.1%
+    $card_fee_rate = 0.011;
 } elseif ($annualized_sales <= 1000000000) {
-    $card_fee_rate = 0.0125; // 10억원 이하 1.25%
+    $card_fee_rate = 0.0125;
 } else {
     $card_fee_rate = $cur_ratio['card_fee'];
 }
@@ -396,7 +399,7 @@ try {
     $ai_rec = $stmt_rec->fetch(PDO::FETCH_ASSOC);
 } catch (PDOException $e) {}
 
-/* 3. 매출 세분화 및 종합 정산 (실데이터 기반 집계) */
+/* 3. 매출 세분화 및 종합 정산 */
 $sales_breakdown = [
     'card'           => 0,
     'tax_invoice'    => 0,
@@ -446,7 +449,6 @@ foreach ($sales as $s) {
     }
 }
 
-// 실제 배달/이커머스 채널별 동적 객단가 자동 추산
 $dynamic_avg_ticket = $benchmark['avg_customer_count'] > 0 && $benchmark['avg_daily_sales'] > 0 
     ? round($benchmark['avg_daily_sales'] / $benchmark['avg_customer_count']) 
     : 24000;

@@ -2,6 +2,7 @@
 /* ========================================================================== */
 /* 📊 동종 상권 비교 및 벤치마킹 대시보드 (benchmark.htm) */
 /* - [실제 연계] 소상공인시장진흥공단 공공데이터 상권분석 API 파싱 및 동적 벤치마킹 */
+/* - [Ubuntu 24.04 무중단 최적화] 세션 락 해제 및 API 고속 캐싱 탑재 */
 /* ========================================================================== */
 if (session_status() === PHP_SESSION_NONE) {
     session_start();
@@ -9,6 +10,7 @@ if (session_status() === PHP_SESSION_NONE) {
 ob_start();
 
 require_once 'db.php';
+require_once 'api_cache_helper.php';
 
 if (!isset($_SESSION['user_id'])) {
     header("Location: login.htm");
@@ -18,6 +20,9 @@ if (!isset($_SESSION['user_id'])) {
 $user_id = (int)$_SESSION['user_id'];
 $user_role = $_SESSION['role'] ?? 'USER';
 $store_name = $_SESSION['store_name'] ?? '내 매장';
+
+// 단순 조회 페이지이므로 세션 잠금을 즉시 해제하여 브라우저 병목 차단
+releaseSessionLock();
 
 /* [1] 공공데이터포털 API 인증키 로드 */
 $api_portal_key = '';
@@ -37,12 +42,20 @@ $weekday_sales = [0, 0, 0, 0, 0, 0, 0]; // 일(0) ~ 토(6)
 $has_real_sales = false;
 
 try {
+    $date_col = 'sales_date';
+    try {
+        $cols = $pdo->query("SHOW COLUMNS FROM sales_data")->fetchAll(PDO::FETCH_COLUMN);
+        if (!in_array('sales_date', $cols) && in_array('sale_date', $cols)) {
+            $date_col = 'sale_date';
+        }
+    } catch (Exception $colEx) {}
+
     $sales_stmt = $pdo->prepare("
         SELECT 
             COALESCE(AVG(amount), 650000) as avg_amount,
             COUNT(*) as cnt
         FROM sales_data 
-        WHERE user_id = ? AND sales_date >= DATE_SUB(CURRENT_DATE(), INTERVAL 30 DAY)
+        WHERE user_id = ? AND {$date_col} >= DATE_SUB(CURRENT_DATE(), INTERVAL 30 DAY)
     ");
     $sales_stmt->execute([$user_id]);
     $sales_res = $sales_stmt->fetch(PDO::FETCH_ASSOC);
@@ -53,11 +66,11 @@ try {
 
     $day_stmt = $pdo->prepare("
         SELECT 
-            DAYOFWEEK(sales_date) as day_idx,
+            DAYOFWEEK({$date_col}) as day_idx,
             AVG(amount) as day_avg
         FROM sales_data
-        WHERE user_id = ? AND sales_date >= DATE_SUB(CURRENT_DATE(), INTERVAL 60 DAY)
-        GROUP BY DAYOFWEEK(sales_date)
+        WHERE user_id = ? AND {$date_col} >= DATE_SUB(CURRENT_DATE(), INTERVAL 60 DAY)
+        GROUP BY DAYOFWEEK({$date_col})
     ");
     $day_stmt->execute([$user_id]);
     $day_rows = $day_stmt->fetchAll(PDO::FETCH_ASSOC);
@@ -79,37 +92,41 @@ foreach ($day_map as $pos => $d_idx) {
     }
 }
 
-/* [3] 공공데이터포털 실시간 상권 정보 수신 및 동적 벤치마킹 산출 */
+/* [3] 공공데이터포털 실시간 상권 정보 수신 (캐싱 파이프라인 1,800초 보호) */
 $industry_daily_avg = 580000;
 $api_connected = false;
 $api_store_density_count = 0;
 
 if (!empty($api_portal_key)) {
-    // 서울 중구/강남구 표준 행정동 기반 실시간 상권 점포 밀도 분석
-    $api_url = "https://apis.data.go.kr/B553077/api/open/sdsc2/storeListInDong?serviceKey=" . urlencode($api_portal_key) . "&divId=ctprvnCd&key=11&type=json&numOfRows=50";
-    
-    $ch = curl_init();
-    curl_setopt_array($ch, [
-        CURLOPT_URL => $api_url,
-        CURLOPT_RETURNTRANSFER => true,
-        CURLOPT_CONNECTTIMEOUT => 2,
-        CURLOPT_TIMEOUT => 3,
-        CURLOPT_SSL_VERIFYPEER => false
-    ]);
-    $res = curl_exec($ch);
-    $http_code = curl_getinfo($ch, CURLINFO_HTTP_CODE);
-    curl_close($ch);
+    $cache_key = 'benchmark_store_density_' . md5($api_portal_key);
+    $api_data = getSafeCachedApiData($cache_key, 1800, function() use ($api_portal_key) {
+        $api_url = "https://apis.data.go.kr/B553077/api/open/sdsc2/storeListInDong?serviceKey=" . urlencode($api_portal_key) . "&divId=ctprvnCd&key=11&type=json&numOfRows=50";
+        $ch = curl_init();
+        curl_setopt_array($ch, [
+            CURLOPT_URL => $api_url,
+            CURLOPT_RETURNTRANSFER => true,
+            CURLOPT_CONNECTTIMEOUT => 2,
+            CURLOPT_TIMEOUT => 3,
+            CURLOPT_SSL_VERIFYPEER => false
+        ]);
+        $res = curl_exec($ch);
+        $http_code = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        curl_close($ch);
 
-    if ($http_code === 200 && $res) {
-        $json = json_decode($res, true);
-        if (!empty($json['body']['items'])) {
-            $api_connected = true;
-            $items = $json['body']['items'];
-            $api_store_density_count = count($items);
-            // 점포 밀집도 지수에 따른 정밀 가중치 계산 (표준 일매출 58만 ~ 68만 원 범위 동적 수렴)
-            $density_factor = min(1.2, max(0.9, 1.0 + ($api_store_density_count - 20) * 0.005));
-            $industry_daily_avg = round(590000 * $density_factor);
+        if ($http_code === 200 && $res) {
+            $json = json_decode($res, true);
+            if (!empty($json['body']['items'])) {
+                return $json['body']['items'];
+            }
         }
+        return null;
+    });
+
+    if (!empty($api_data)) {
+        $api_connected = true;
+        $api_store_density_count = count($api_data);
+        $density_factor = min(1.2, max(0.9, 1.0 + ($api_store_density_count - 20) * 0.005));
+        $industry_daily_avg = round(590000 * $density_factor);
     }
 }
 
@@ -123,7 +140,7 @@ $chart_industry_sales = [
     round($industry_daily_avg * 0.85)
 ];
 
-$diff_rate = round((($my_daily_avg - $industry_daily_avg) / $industry_daily_avg) * 100, 1);
+$diff_rate = round((($my_daily_avg - $industry_daily_avg) / max(1, $industry_daily_avg)) * 100, 1);
 
 require_once 'header.php';
 ?>
