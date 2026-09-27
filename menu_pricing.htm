@@ -20,6 +20,11 @@ $user_id = (int)$_SESSION['user_id'];
 $user_role = $_SESSION['role'] ?? 'USER';
 $store_name = $_SESSION['store_name'] ?? '내 매장';
 
+if (empty($_SESSION['csrf_token'])) {
+    $_SESSION['csrf_token'] = bin2hex(random_bytes(32));
+}
+$csrf_token = $_SESSION['csrf_token'];
+
 try {
     $pdo->exec("
         CREATE TABLE IF NOT EXISTS `store_menu_pricing` (
@@ -41,6 +46,12 @@ try {
 } catch (PDOException $e) {}
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
+    if (!hash_equals($_SESSION['csrf_token'] ?? '', $_POST['csrf_token'] ?? '')) {
+        $_SESSION['flash_err'] = '비정상적인 요청이거나 세션이 만료되었습니다.';
+        header("Location: menu_pricing.htm");
+        exit;
+    }
+
     if ($user_role === 'USER') {
         $_SESSION['flash_err'] = '일반회원은 메뉴 원가 등록 권한이 없습니다.';
         header("Location: menu_pricing.htm");
@@ -155,6 +166,13 @@ require_once 'header.php';
     </div>
 <?php endif; ?>
 
+<?php if ($flash_err): ?>
+    <div class="alert alert-danger alert-dismissible fade show rounded-3 mb-4 shadow-sm small" role="alert">
+        <i class="fa-solid fa-triangle-exclamation me-2 text-danger"></i><?= htmlspecialchars($flash_err) ?>
+        <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+    </div>
+<?php endif; ?>
+
 <div class="row mb-4">
     <div class="col-12">
         <div class="glass-card p-4">
@@ -199,7 +217,6 @@ require_once 'header.php';
                                 $del_net = $del_price - $direct_cost - $total_del_deduction;
                                 $del_rate = ($del_price > 0) ? round(($del_net / $del_price) * 100, 1) : 0;
 
-                                // 배달앱 최소 25% 마진을 보장하는 역산 공식
                                 $total_fee_ratio = ((float)$m['platform_fee_rate'] + (float)$m['payment_fee_rate'] + 25.0) / 100;
                                 $ai_rec_del_price = ($total_fee_ratio < 1) ? round(($direct_cost + $tip) / (1 - $total_fee_ratio)) : $del_price;
                                 $ai_rec_del_price = ceil($ai_rec_del_price / 100) * 100;
@@ -245,11 +262,9 @@ require_once 'header.php';
                                 </td>
                                 <td class="text-center">
                                     <?php if ($user_role !== 'USER' && !empty($m['id'])): ?>
-                                        <form method="POST" action="menu_pricing.htm" class="d-inline" onsubmit="return confirm('이 메뉴의 원가 데이터를 삭제하시겠습니까?');">
-                                            <input type="hidden" name="action" value="delete_menu">
-                                            <input type="hidden" name="menu_id" value="<?= (int)$m['id'] ?>">
-                                            <button type="submit" class="btn btn-outline-danger btn-sm rounded-pill px-2 py-0"><i class="fa-solid fa-trash-can"></i></button>
-                                        </form>
+                                        <button type="button" class="btn btn-outline-danger btn-sm rounded-pill px-2 py-0" onclick="triggerDeleteMenu(<?= (int)$m['id'] ?>, '<?= htmlspecialchars(addslashes($m['menu_name'])) ?>')" title="삭제">
+                                            <i class="fa-solid fa-trash-can"></i>
+                                        </button>
                                     <?php else: ?>
                                         <span class="text-muted">-</span>
                                     <?php endif; ?>
@@ -270,12 +285,38 @@ require_once 'header.php';
     </div>
 </div>
 
+<!-- 개별 삭제 확인 모달 -->
+<div class="modal fade" id="deleteMenuModal" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered modal-sm">
+        <div class="modal-content border-0 shadow-lg rounded-4 overflow-hidden">
+            <div class="modal-header bg-danger text-white py-2 px-3">
+                <h6 class="modal-title fw-bold fs-6"><i class="fa-solid fa-trash-can me-1"></i>메뉴 삭제</h6>
+                <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+            </div>
+            <form method="POST" action="menu_pricing.htm">
+                <input type="hidden" name="action" value="delete_menu">
+                <input type="hidden" name="csrf_token" value="<?= htmlspecialchars($csrf_token) ?>">
+                <input type="hidden" name="menu_id" id="deleteModalMenuId" value="">
+                <div class="modal-body p-3 text-center">
+                    <p class="mb-1 text-dark fw-bold" id="deleteModalMenuText">메뉴 원가 데이터를 삭제하시겠습니까?</p>
+                    <small class="text-muted">삭제 시 대장에서 즉시 제거됩니다.</small>
+                </div>
+                <div class="modal-footer bg-light py-2 px-3 justify-content-center">
+                    <button type="button" class="btn btn-secondary btn-sm rounded-pill px-3" data-bs-dismiss="modal">취소</button>
+                    <button type="submit" class="btn btn-danger btn-sm rounded-pill px-3 fw-bold">삭제 확정</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
 <?php if ($user_role !== 'USER'): ?>
 <div class="modal fade" id="addMenuModal" tabindex="-1" aria-hidden="true">
     <div class="modal-dialog modal-dialog-centered modal-lg">
         <div class="modal-content border-0 shadow-lg rounded-4 overflow-hidden">
             <form method="POST" action="menu_pricing.htm">
                 <input type="hidden" name="action" value="add_menu">
+                <input type="hidden" name="csrf_token" value="<?= htmlspecialchars($csrf_token) ?>">
                 <div class="modal-header bg-primary text-white py-3 px-4">
                     <h5 class="modal-title fs-6 fw-bold text-white"><i class="fa-solid fa-utensils me-2"></i>신규 메뉴 원가 등록</h5>
                     <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
@@ -340,6 +381,16 @@ require_once 'header.php';
     </div>
 </div>
 <?php endif; ?>
+
+<script>
+function triggerDeleteMenu(id, name) {
+    document.getElementById('deleteModalMenuId').value = id;
+    document.getElementById('deleteModalMenuText').innerText = `"${name}" 메뉴 원가 데이터를 삭제하시겠습니까?`;
+    if (typeof bootstrap !== 'undefined') {
+        new bootstrap.Modal(document.getElementById('deleteMenuModal')).show();
+    }
+}
+</script>
 
 <?php
 include_once 'footer.php';

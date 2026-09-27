@@ -17,10 +17,14 @@ if (!isset($_SESSION['user_id'])) {
 }
 
 $user_id = (int)$_SESSION['user_id'];
-$user_role =$_SESSION['role'] ?? 'USER';
-$store_name =$_SESSION['store_name'] ?? '내 매장';
+$user_role = $_SESSION['role'] ?? 'USER';
+$store_name = $_SESSION['store_name'] ?? '내 매장';
 
-/* 무중단 DB 보완: 소방 안전점검 및 화재배상보험 관리 테이블 자동 생성 */
+if (empty($_SESSION['csrf_token'])) {
+    $_SESSION['csrf_token'] = bin2hex(random_bytes(32));
+}
+$csrf_token = $_SESSION['csrf_token'];
+
 try {
     $pdo->exec("
         CREATE TABLE IF NOT EXISTS `store_safety_audits` (
@@ -40,9 +44,15 @@ try {
     ");
 } catch (PDOException $e) {}
 
-/* 점검 등록 및 삭제 처리 */
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
-    if ($user_role === 'USER') {$_SESSION['flash_err'] = '일반회원(읽기 전용)은 점검 등록 및 삭제 권한이 없습니다.';
+    if (!hash_equals($_SESSION['csrf_token'] ?? '', $_POST['csrf_token'] ?? '')) {
+        $_SESSION['flash_err'] = '비정상적인 요청이거나 세션이 만료되었습니다.';
+        header("Location: safety_insurance.htm");
+        exit;
+    }
+
+    if ($user_role === 'USER') {
+        $_SESSION['flash_err'] = '일반회원(읽기 전용)은 점검 등록 및 삭제 권한이 없습니다.';
         header("Location: safety_insurance.htm");
         exit;
     }
@@ -56,29 +66,31 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         $ins_date = trim($_POST['insurance_expire_date'] ?? date('Y-m-d', strtotime('+1 year')));
         $note = trim($_POST['manager_note'] ?? '');
 
-        // 소방안전 점수 엄격 산출
         $score = 100;
         if ($ext !== '정상') $score -= 25;
         if ($alarm !== '정상') $score -= 25;
-        if ($exit_s !== '양호') $score -= 30; // 비상구 적치물 과태료 최대 300만 원
+        if ($exit_s !== '양호') $score -= 30;
         if ($gas !== '정상') $score -= 20;
 
         try {
-            $ins =$pdo->prepare("
+            $ins = $pdo->prepare("
                 INSERT INTO store_safety_audits 
                 (user_id, audit_date, extinguisher_status, fire_alarm_status, emergency_exit_status, gas_breaker_status, insurance_expire_date, compliance_score, manager_note) 
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             ");
-            $ins->execute([$user_id,$a_date, $ext,$alarm, $exit_s,$gas, $ins_date,$score, $note]);
+            $ins->execute([$user_id, $a_date, $ext, $alarm, $exit_s, $gas, $ins_date, $score, $note]);
             $_SESSION['flash_msg'] = "소방 안전점검 및 보험 관리 이력이 성공적으로 저장되었습니다.";
-        } catch (PDOException $e) {$_SESSION['flash_err'] = '점검 결과 저장 중 오류가 발생했습니다.';
+        } catch (PDOException $e) {
+            $_SESSION['flash_err'] = '점검 결과 저장 중 오류가 발생했습니다.';
         }
     } elseif ($_POST['action'] === 'delete_safety') {
         $del_id = intval($_POST['audit_id'] ?? 0);
         try {
-            $del =$pdo->prepare("DELETE FROM store_safety_audits WHERE id = ? AND user_id = ?");
-            $del->execute([$del_id, $user_id]);$_SESSION['flash_msg'] = '선택하신 점검 내역이 삭제되었습니다.';
-        } catch (PDOException $e) {$_SESSION['flash_err'] = '삭제 처리 중 오류가 발생했습니다.';
+            $del = $pdo->prepare("DELETE FROM store_safety_audits WHERE id = ? AND user_id = ?");
+            $del->execute([$del_id, $user_id]);
+            $_SESSION['flash_msg'] = '선택하신 점검 내역이 삭제되었습니다.';
+        } catch (PDOException $e) {
+            $_SESSION['flash_err'] = '삭제 처리 중 오류가 발생했습니다.';
         }
     }
 
@@ -86,18 +98,19 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
     exit;
 }
 
-$flash_msg =$_SESSION['flash_msg'] ?? '';
-$flash_err =$_SESSION['flash_err'] ?? '';
-unset($_SESSION['flash_msg'],$_SESSION['flash_err']);
+$flash_msg = $_SESSION['flash_msg'] ?? '';
+$flash_err = $_SESSION['flash_err'] ?? '';
+unset($_SESSION['flash_msg'], $_SESSION['flash_err']);
 
 $audits = [];
 try {
-    $stmt =$pdo->prepare("SELECT * FROM store_safety_audits WHERE user_id = ? ORDER BY audit_date DESC, id DESC LIMIT 15");
+    $stmt = $pdo->prepare("SELECT * FROM store_safety_audits WHERE user_id = ? ORDER BY audit_date DESC, id DESC LIMIT 15");
     $stmt->execute([$user_id]);
-    $audits =$stmt->fetchAll(PDO::FETCH_ASSOC);
+    $audits = $stmt->fetchAll(PDO::FETCH_ASSOC);
 } catch (PDOException $e) {}
 
-if (empty($audits)) {$audits = [
+if (empty($audits)) {
+    $audits = [
         [
             'id' => 0, 'audit_date' => date('Y-m-d'), 'extinguisher_status' => '정상',
             'fire_alarm_status' => '정상', 'emergency_exit_status' => '양호', 'gas_breaker_status' => '정상',
@@ -204,7 +217,7 @@ require_once 'header.php';
                         </tr>
                     </thead>
                     <tbody class="small">
-                        <?php foreach ($audits as$a): ?>
+                        <?php foreach ($audits as $a): ?>
                             <?php
                                 $d_diff = intval((strtotime($a['insurance_expire_date']) - time()) / 86400);
                             ?>
@@ -224,11 +237,9 @@ require_once 'header.php';
                                 <td class="text-secondary"><?= htmlspecialchars($a['manager_note'] ?? '-') ?></td>
                                 <td class="text-center">
                                     <?php if ($user_role !== 'USER' && !empty($a['id'])): ?>
-                                        <form method="POST" action="safety_insurance.htm" class="d-inline" onsubmit="return confirm('점검 내역을 삭제하시겠습니까?');">
-                                            <input type="hidden" name="action" value="delete_safety">
-                                            <input type="hidden" name="audit_id" value="<?= (int)$a['id'] ?>">
-                                            <button type="submit" class="btn btn-outline-danger btn-sm rounded-pill px-2 py-0"><i class="fa-solid fa-trash-can"></i></button>
-                                        </form>
+                                        <button type="button" class="btn btn-outline-danger btn-sm rounded-pill px-2 py-0" onclick="triggerDeleteSafety(<?= (int)$a['id'] ?>, '<?= htmlspecialchars(addslashes($a['audit_date'])) ?>')" title="삭제">
+                                            <i class="fa-solid fa-trash-can"></i>
+                                        </button>
                                     <?php else: ?>
                                         <span class="text-muted">-</span>
                                     <?php endif; ?>
@@ -242,12 +253,38 @@ require_once 'header.php';
     </div>
 </div>
 
+<!-- 개별 삭제 확인 모달 -->
+<div class="modal fade" id="deleteSafetyModal" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered modal-sm">
+        <div class="modal-content border-0 shadow-lg rounded-4 overflow-hidden">
+            <div class="modal-header bg-danger text-white py-2 px-3">
+                <h6 class="modal-title fw-bold fs-6"><i class="fa-solid fa-trash-can me-1"></i>점검 내역 삭제</h6>
+                <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+            </div>
+            <form method="POST" action="safety_insurance.htm">
+                <input type="hidden" name="action" value="delete_safety">
+                <input type="hidden" name="csrf_token" value="<?= htmlspecialchars($csrf_token) ?>">
+                <input type="hidden" name="audit_id" id="deleteModalAuditId" value="">
+                <div class="modal-body p-3 text-center">
+                    <p class="mb-1 text-dark fw-bold" id="deleteModalAuditText">점검 내역을 삭제하시겠습니까?</p>
+                    <small class="text-muted">삭제 시 대장에서 즉시 제거됩니다.</small>
+                </div>
+                <div class="modal-footer bg-light py-2 px-3 justify-content-center">
+                    <button type="button" class="btn btn-secondary btn-sm rounded-pill px-3" data-bs-dismiss="modal">취소</button>
+                    <button type="submit" class="btn btn-danger btn-sm rounded-pill px-3 fw-bold">삭제 확정</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
 <?php if ($user_role !== 'USER'): ?>
 <div class="modal fade" id="addSafetyModal" tabindex="-1" aria-hidden="true">
     <div class="modal-dialog modal-dialog-centered modal-lg">
         <div class="modal-content border-0 shadow-lg rounded-4 overflow-hidden">
             <form method="POST" action="safety_insurance.htm">
                 <input type="hidden" name="action" value="save_safety">
+                <input type="hidden" name="csrf_token" value="<?= htmlspecialchars($csrf_token) ?>">
                 <div class="modal-header bg-primary text-white py-3 px-4">
                     <h5 class="modal-title fs-6 fw-bold text-white"><i class="fa-solid fa-fire-extinguisher me-2"></i>소방 안전점검표 등록</h5>
                     <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
@@ -295,6 +332,16 @@ require_once 'header.php';
     </div>
 </div>
 <?php endif; ?>
+
+<script>
+function triggerDeleteSafety(id, dateStr) {
+    document.getElementById('deleteModalAuditId').value = id;
+    document.getElementById('deleteModalAuditText').innerText = `"${dateStr}" 점검 내역을 삭제하시겠습니까?`;
+    if (typeof bootstrap !== 'undefined') {
+        new bootstrap.Modal(document.getElementById('deleteSafetyModal')).show();
+    }
+}
+</script>
 
 <?php
 include_once 'footer.php';

@@ -2,7 +2,7 @@
 /* ========================================================================== */
 /* 🎫 종이쿠폰 없는 모바일 단골 스탬프 & 적립 리워드 플래너 (loyalty_stamp.htm) */
 /* - [실제 연계] 고객 휴대폰 번호 기반 스탬프 10개 적립 및 무료 리워드 자동 전환 */
-/* - 완벽한 정규식 검증, 실시간 방문 횟수 통계 누적 */
+/* - 완벽한 정규식 검증, 실시간 방문 횟수 통계 누적, CSRF 방어 완비 */
 /* ========================================================================== */
 if (session_status() === PHP_SESSION_NONE) {
     session_start();
@@ -17,7 +17,11 @@ if (!isset($_SESSION['user_id'])) {
 }
 
 $user_id = (int)$_SESSION['user_id'];
-$user_role = $_SESSION['role'] ?? 'USER';
+$user_role =$_SESSION['role'] ?? 'USER';
+
+if (empty($_SESSION['csrf_token'])) {$_SESSION['csrf_token'] = bin2hex(random_bytes(32));
+}
+$csrf_token =$_SESSION['csrf_token'];
 
 try {
     $pdo->exec("
@@ -36,39 +40,38 @@ try {
 } catch (PDOException $e) {}
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
-    if ($user_role === 'USER') {
-        $_SESSION['flash_err'] = '일반회원은 스탬프 적립 및 리워드 사용 권한이 없습니다.';
+    if (!hash_equals($_SESSION['csrf_token'] ?? '', $_POST['csrf_token'] ?? '')) {$_SESSION['flash_err'] = '비정상적인 요청이거나 세션이 만료되었습니다.';
         header("Location: loyalty_stamp.htm");
         exit;
     }
 
-    if ($_POST['action'] === 'add_stamp') {
-        $phone = trim($_POST['customer_phone'] ?? '');
-        $add_qty = max(1, intval($_POST['stamp_qty'] ?? 1));
-        $today = date('Y-m-d');
+    if ($user_role === 'USER') {$_SESSION['flash_err'] = '일반회원은 스탬프 적립 및 리워드 사용 권한이 없습니다.';
+        header("Location: loyalty_stamp.htm");
+        exit;
+    }
 
-        if (preg_match('/^010-?\d{4}-?\d{4}$/', $phone)) {
-            $clean_phone = preg_replace('/[^0-9]/', '', $phone);
+    if ($_POST['action'] === 'add_stamp') {$phone = trim($_POST['customer_phone'] ?? '');$add_qty = max(1, intval($_POST['stamp_qty'] ?? 1));$today = date('Y-m-d');
+
+        if (preg_match('/^010-?\d{4}-?\d{4}$/',$phone)) {
+            $clean_phone = preg_replace('/[^0-9]/', '',$phone);
             $fmt_phone = substr($clean_phone, 0, 3) . '-' . substr($clean_phone, 3, 4) . '-' . substr($clean_phone, 7);
 
             try {
-                $chk = $pdo->prepare("SELECT current_stamps, total_visits FROM store_customer_stamps WHERE user_id = ? AND customer_phone = ?");
-                $chk->execute([$user_id, $fmt_phone]);
-                $existing = $chk->fetch(PDO::FETCH_ASSOC);
+                $chk =$pdo->prepare("SELECT current_stamps, total_visits FROM store_customer_stamps WHERE user_id = ? AND customer_phone = ?");
+                $chk->execute([$user_id,$fmt_phone]);
+                $existing =$chk->fetch(PDO::FETCH_ASSOC);
 
-                if ($existing) {
-                    $new_stamps = (int)$existing['current_stamps'] + $add_qty;
+                if ($existing) {$new_stamps = (int)$existing['current_stamps'] +$add_qty;
                     $reward = ($new_stamps >= 10) ? 1 : 0;
-                    $upd = $pdo->prepare("UPDATE store_customer_stamps SET current_stamps = ?, total_visits = total_visits + 1, last_visit_date = ?, reward_ready = ? WHERE user_id = ? AND customer_phone = ?");
-                    $upd->execute([$new_stamps, $today, $reward, $user_id, $fmt_phone]);
+                    $upd =$pdo->prepare("UPDATE store_customer_stamps SET current_stamps = ?, total_visits = total_visits + 1, last_visit_date = ?, reward_ready = ? WHERE user_id = ? AND customer_phone = ?");
+                    $upd->execute([$new_stamps, $today,$reward, $user_id,$fmt_phone]);
                 } else {
                     $reward = ($add_qty >= 10) ? 1 : 0;
-                    $ins = $pdo->prepare("INSERT INTO store_customer_stamps (user_id, customer_phone, current_stamps, total_visits, last_visit_date, reward_ready) VALUES (?, ?, ?, 1, ?, ?)");
-                    $ins->execute([$user_id, $fmt_phone, $add_qty, $today, $reward]);
+                    $ins =$pdo->prepare("INSERT INTO store_customer_stamps (user_id, customer_phone, current_stamps, total_visits, last_visit_date, reward_ready) VALUES (?, ?, ?, 1, ?, ?)");
+                    $ins->execute([$user_id, $fmt_phone,$add_qty, $today,$reward]);
                 }
                 $_SESSION['flash_msg'] = "{$fmt_phone} 고객님께 스탬프 {$add_qty}개가 성공적으로 적립되었습니다.";
-            } catch (PDOException $e) {
-                $_SESSION['flash_err'] = '스탬프 적립 처리 중 오류가 발생했습니다.';
+            } catch (PDOException $e) {$_SESSION['flash_err'] = '스탬프 적립 처리 중 오류가 발생했습니다.';
             }
         } else {
             $_SESSION['flash_err'] = '올바른 휴대폰 번호 형식(010-XXXX-XXXX)을 입력해주세요.';
@@ -76,11 +79,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
     } elseif ($_POST['action'] === 'use_reward') {
         $phone = trim($_POST['customer_phone'] ?? '');
         try {
-            $upd = $pdo->prepare("UPDATE store_customer_stamps SET current_stamps = GREATEST(0, current_stamps - 10), reward_ready = IF(current_stamps - 10 >= 10, 1, 0) WHERE user_id = ? AND customer_phone = ?");
-            $upd->execute([$user_id, $phone]);
+            $upd =$pdo->prepare("UPDATE store_customer_stamps SET current_stamps = GREATEST(0, current_stamps - 10), reward_ready = IF(current_stamps - 10 >= 10, 1, 0) WHERE user_id = ? AND customer_phone = ?");
+            $upd->execute([$user_id,$phone]);
             $_SESSION['flash_msg'] = "{$phone} 고객님의 무료 쿠폰(스탬프 10개 차감) 처리가 완료되었습니다.";
-        } catch (PDOException $e) {
-            $_SESSION['flash_err'] = '리워드 사용 처리 중 오류가 발생했습니다.';
+        } catch (PDOException $e) {$_SESSION['flash_err'] = '리워드 사용 처리 중 오류가 발생했습니다.';
         }
     }
 
@@ -88,15 +90,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
     exit;
 }
 
-$flash_msg = $_SESSION['flash_msg'] ?? '';
-$flash_err = $_SESSION['flash_err'] ?? '';
-unset($_SESSION['flash_msg'], $_SESSION['flash_err']);
+$flash_msg =$_SESSION['flash_msg'] ?? '';
+$flash_err =$_SESSION['flash_err'] ?? '';
+unset($_SESSION['flash_msg'],$_SESSION['flash_err']);
 
 $stamps = [];
 try {
-    $stmt = $pdo->prepare("SELECT * FROM store_customer_stamps WHERE user_id = ? ORDER BY last_visit_date DESC, id DESC LIMIT 25");
+    $stmt =$pdo->prepare("SELECT * FROM store_customer_stamps WHERE user_id = ? ORDER BY last_visit_date DESC, id DESC LIMIT 25");
     $stmt->execute([$user_id]);
-    $stamps = $stmt->fetchAll(PDO::FETCH_ASSOC);
+    $stamps =$stmt->fetchAll(PDO::FETCH_ASSOC);
 } catch (PDOException $e) {}
 
 require_once 'header.php';
@@ -161,7 +163,7 @@ require_once 'header.php';
                         <?php if (empty($stamps)): ?>
                             <tr><td colspan="6" class="text-center py-4 text-muted">등록된 단골 스탬프 내역이 없습니다.</td></tr>
                         <?php else: ?>
-                            <?php foreach ($stamps as $s): ?>
+                            <?php foreach ($stamps as$s): ?>
                                 <tr>
                                     <td class="fw-bold text-dark"><?= htmlspecialchars($s['customer_phone']) ?></td>
                                     <td class="text-center">
@@ -177,12 +179,10 @@ require_once 'header.php';
                                         <?php endif; ?>
                                     </td>
                                     <td class="text-center">
-                                        <?php if ($user_role !== 'USER' && $s['reward_ready']): ?>
-                                            <form method="POST" action="loyalty_stamp.htm" class="d-inline" onsubmit="return confirm('스탬프 10개를 차감하고 무료 리워드를 지급하시겠습니까?');">
-                                                <input type="hidden" name="action" value="use_reward">
-                                                <input type="hidden" name="customer_phone" value="<?= htmlspecialchars($s['customer_phone']) ?>">
-                                                <button type="submit" class="btn btn-sm btn-outline-success rounded-pill px-3 fw-bold">리워드 사용</button>
-                                            </form>
+                                        <?php if ($user_role !== 'USER' &&$s['reward_ready']): ?>
+                                            <button type="button" class="btn btn-sm btn-outline-success rounded-pill px-3 fw-bold" onclick="triggerUseReward('<?= htmlspecialchars(addslashes($s['customer_phone'])) ?>')">
+                                                리워드 사용
+                                            </button>
                                         <?php else: ?>
                                             <span class="text-muted">-</span>
                                         <?php endif; ?>
@@ -197,12 +197,38 @@ require_once 'header.php';
     </div>
 </div>
 
+<!-- 리워드 사용 확인 모달 -->
+<div class="modal fade" id="useRewardModal" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered modal-sm">
+        <div class="modal-content border-0 shadow-lg rounded-4 overflow-hidden">
+            <div class="modal-header bg-success text-white py-2 px-3">
+                <h6 class="modal-title fw-bold fs-6"><i class="fa-solid fa-gift me-1"></i>리워드 쿠폰 사용</h6>
+                <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+            </div>
+            <form method="POST" action="loyalty_stamp.htm">
+                <input type="hidden" name="action" value="use_reward">
+                <input type="hidden" name="csrf_token" value="<?= htmlspecialchars($csrf_token) ?>">
+                <input type="hidden" name="customer_phone" id="modalRewardPhone" value="">
+                <div class="modal-body p-3 text-center">
+                    <p class="mb-1 text-dark fw-bold" id="modalRewardText">스탬프 10개를 차감하시겠습니까?</p>
+                    <small class="text-muted">무료 혜택이 고객에게 즉시 제공됩니다.</small>
+                </div>
+                <div class="modal-footer bg-light py-2 px-3 justify-content-center">
+                    <button type="button" class="btn btn-secondary btn-sm rounded-pill px-3" data-bs-dismiss="modal">취소</button>
+                    <button type="submit" class="btn btn-success btn-sm rounded-pill px-3 fw-bold">차감 및 사용</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
 <?php if ($user_role !== 'USER'): ?>
 <div class="modal fade" id="addStampModal" tabindex="-1" aria-hidden="true">
     <div class="modal-dialog modal-dialog-centered">
         <div class="modal-content border-0 shadow-lg rounded-4 overflow-hidden">
             <form method="POST" action="loyalty_stamp.htm">
                 <input type="hidden" name="action" value="add_stamp">
+                <input type="hidden" name="csrf_token" value="<?= htmlspecialchars($csrf_token) ?>">
                 <div class="modal-header bg-primary text-white py-3 px-4">
                     <h5 class="modal-title fs-6 fw-bold text-white"><i class="fa-solid fa-stamp me-2"></i>스탬프 즉시 적립</h5>
                     <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
@@ -226,6 +252,16 @@ require_once 'header.php';
     </div>
 </div>
 <?php endif; ?>
+
+<script>
+function triggerUseReward(phone) {
+    document.getElementById('modalRewardPhone').value = phone;
+    document.getElementById('modalRewardText').innerText = `"${phone}" 고객님의 스탬프 10개를 차감하고 무료 리워드를 지급하시겠습니까?`;
+    if (typeof bootstrap !== 'undefined') {
+        new bootstrap.Modal(document.getElementById('useRewardModal')).show();
+    }
+}
+</script>
 
 <?php
 include_once 'footer.php';

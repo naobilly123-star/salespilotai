@@ -17,12 +17,17 @@ if (!isset($_SESSION['user_id'])) {
 }
 
 $user_id = (int)$_SESSION['user_id'];
-$user_role =$_SESSION['role'] ?? 'USER';
-$store_name =$_SESSION['store_name'] ?? '내 매장';
+$user_role = $_SESSION['role'] ?? 'USER';
+$store_name = $_SESSION['store_name'] ?? '내 매장';
+
+if (empty($_SESSION['csrf_token'])) {
+    $_SESSION['csrf_token'] = bin2hex(random_bytes(32));
+}
+$csrf_token = $_SESSION['csrf_token'];
 
 $api_hometax_key = '';
 try {
-    $set_stmt =$pdo->query("SELECT setting_value FROM site_settings WHERE setting_key = 'api_hometax_key' LIMIT 1");
+    $set_stmt = $pdo->query("SELECT setting_value FROM site_settings WHERE setting_key = 'api_hometax_key' LIMIT 1");
     $api_hometax_key = trim($set_stmt->fetchColumn() ?: '');
 } catch (PDOException $e) {}
 
@@ -56,16 +61,17 @@ $store_info = [
     'address' => '서울시 강남구 테헤란로 1'
 ];
 try {
-    $st_stmt =$pdo->prepare("SELECT biz_no, store_name, address FROM stores WHERE user_id = ? AND is_active = 1 LIMIT 1");
+    $st_stmt = $pdo->prepare("SELECT biz_no, store_name, address FROM stores WHERE user_id = ? AND is_active = 1 LIMIT 1");
     $st_stmt->execute([$user_id]);
-    if ($s_row =$st_stmt->fetch(PDO::FETCH_ASSOC)) {
-        if (!empty($s_row['biz_no'])) $store_info['biz_no'] =$s_row['biz_no'];
-        if (!empty($s_row['store_name'])) $store_info['store_name'] =$s_row['store_name'];
-        if (!empty($s_row['address'])) $store_info['address'] =$s_row['address'];
+    if ($s_row = $st_stmt->fetch(PDO::FETCH_ASSOC)) {
+        if (!empty($s_row['biz_no'])) $store_info['biz_no'] = $s_row['biz_no'];
+        if (!empty($s_row['store_name'])) $store_info['store_name'] = $s_row['store_name'];
+        if (!empty($s_row['address'])) $store_info['address'] = $s_row['address'];
     }
 } catch (PDOException $e) {}
 
-$clean_biz = str_replace('-', '', $store_info['biz_no']);$is_nts_online = false;
+$clean_biz = str_replace('-', '', $store_info['biz_no']);
+$is_nts_online = false;
 if (strlen($clean_biz) === 10 && !empty($api_hometax_key)) {
     $nts_ch = curl_init('https://api.odcloud.kr/api/nts-businessman/v1/status?serviceKey=' . urlencode($api_hometax_key));
     curl_setopt_array($nts_ch, [
@@ -80,15 +86,23 @@ if (strlen($clean_biz) === 10 && !empty($api_hometax_key)) {
     $http_code = curl_getinfo($nts_ch, CURLINFO_HTTP_CODE);
     curl_close($nts_ch);
 
-    if ($http_code === 200 &&$nts_res) {
+    if ($http_code === 200 && $nts_res) {
         $nts_json = json_decode($nts_res, true);
-        if (!empty($nts_json['data'][0]['b_stt'])) {$is_nts_online = true;
+        if (!empty($nts_json['data'][0]['b_stt'])) {
+            $is_nts_online = true;
         }
     }
 }
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
-    if ($user_role === 'USER') {$_SESSION['flash_err'] = '일반회원은 영수증 발행 권한이 없습니다.';
+    if (!hash_equals($_SESSION['csrf_token'] ?? '', $_POST['csrf_token'] ?? '')) {
+        $_SESSION['flash_err'] = '비정상적인 요청이거나 세션이 만료되었습니다.';
+        header("Location: receipt_issuer.htm");
+        exit;
+    }
+
+    if ($user_role === 'USER') {
+        $_SESSION['flash_err'] = '일반회원은 영수증 발행 권한이 없습니다.';
         header("Location: receipt_issuer.htm");
         exit;
     }
@@ -96,28 +110,33 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
     if ($_POST['action'] === 'issue_receipt') {
         $c_name = trim($_POST['customer_name'] ?? '고객님');
         $desc = trim($_POST['item_description'] ?? '식사대');
-        $total = max(100, intval($_POST['total_amount'] ?? 10000));$pay = in_array($_POST['payment_method'] ?? '', ['CARD', 'CASH', 'TRANSFER']) ?$_POST['payment_method'] : 'CARD';
+        $total = max(100, intval($_POST['total_amount'] ?? 10000));
+        $pay = in_array($_POST['payment_method'] ?? '', ['CARD', 'CASH', 'TRANSFER']) ? $_POST['payment_method'] : 'CARD';
         $i_date = trim($_POST['issue_date'] ?? date('Y-m-d'));
 
-        $supply = round($total / 1.1);$vat = $total -$supply;
+        $supply = round($total / 1.1);
+        $vat = $total - $supply;
         $rec_no = 'REC-' . date('Ymd') . '-' . strtoupper(substr(uniqid(), -5));
 
         try {
-            $ins =$pdo->prepare("
+            $ins = $pdo->prepare("
                 INSERT INTO store_issued_receipts 
                 (user_id, receipt_no, issue_date, customer_name, item_description, supply_price, vat_amount, total_amount, payment_method, nts_verified) 
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ");
-            $ins->execute([$user_id,$rec_no, $i_date,$c_name, $desc,$supply, $vat,$total, $pay,$is_nts_online ? 1 : 0]);
+            $ins->execute([$user_id, $rec_no, $i_date, $c_name, $desc, $supply, $vat, $total, $pay, $is_nts_online ? 1 : 0]);
             $_SESSION['flash_msg'] = "영수증({$rec_no})이 정상 발행되었습니다.";
-        } catch (PDOException $e) {$_SESSION['flash_err'] = '영수증 발행 처리 중 오류가 발생했습니다.';
+        } catch (PDOException $e) {
+            $_SESSION['flash_err'] = '영수증 발행 처리 중 오류가 발생했습니다.';
         }
     } elseif ($_POST['action'] === 'delete_receipt') {
         $del_id = intval($_POST['receipt_id'] ?? 0);
         try {
-            $del =$pdo->prepare("DELETE FROM store_issued_receipts WHERE id = ? AND user_id = ?");
-            $del->execute([$del_id, $user_id]);$_SESSION['flash_msg'] = '선택하신 영수증이 삭제되었습니다.';
-        } catch (PDOException $e) {$_SESSION['flash_err'] = '삭제 중 오류가 발생했습니다.';
+            $del = $pdo->prepare("DELETE FROM store_issued_receipts WHERE id = ? AND user_id = ?");
+            $del->execute([$del_id, $user_id]);
+            $_SESSION['flash_msg'] = '선택하신 영수증이 삭제되었습니다.';
+        } catch (PDOException $e) {
+            $_SESSION['flash_err'] = '삭제 중 오류가 발생했습니다.';
         }
     }
 
@@ -125,18 +144,19 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
     exit;
 }
 
-$flash_msg =$_SESSION['flash_msg'] ?? '';
-$flash_err =$_SESSION['flash_err'] ?? '';
-unset($_SESSION['flash_msg'],$_SESSION['flash_err']);
+$flash_msg = $_SESSION['flash_msg'] ?? '';
+$flash_err = $_SESSION['flash_err'] ?? '';
+unset($_SESSION['flash_msg'], $_SESSION['flash_err']);
 
 $receipts = [];
 try {
-    $stmt =$pdo->prepare("SELECT * FROM store_issued_receipts WHERE user_id = ? ORDER BY id DESC LIMIT 15");
+    $stmt = $pdo->prepare("SELECT * FROM store_issued_receipts WHERE user_id = ? ORDER BY id DESC LIMIT 15");
     $stmt->execute([$user_id]);
-    $receipts =$stmt->fetchAll(PDO::FETCH_ASSOC);
+    $receipts = $stmt->fetchAll(PDO::FETCH_ASSOC);
 } catch (PDOException $e) {}
 
-if (empty($receipts)) {$receipts = [
+if (empty($receipts)) {
+    $receipts = [
         [
             'id' => 0, 'receipt_no' => 'REC-' . date('Ymd') . '-A102B', 'issue_date' => date('Y-m-d'),
             'customer_name' => '김단골 고객님', 'item_description' => '런치 스페셜 2인',
@@ -216,7 +236,7 @@ require_once 'header.php';
                         </tr>
                     </thead>
                     <tbody class="small">
-                        <?php foreach ($receipts as$r): ?>
+                        <?php foreach ($receipts as $r): ?>
                             <tr>
                                 <td class="fw-bold text-dark"><?= htmlspecialchars($r['receipt_no']) ?></td>
                                 <td><?= htmlspecialchars($r['issue_date']) ?></td>
@@ -225,17 +245,15 @@ require_once 'header.php';
                                 <td class="text-end fw-bold text-primary fs-6"><?= number_format($r['total_amount']) ?>원</td>
                                 <td class="text-center"><span class="badge bg-light text-dark border"><?= $r['payment_method'] ?></span></td>
                                 <td class="text-center">
-                                    <button type="button" class="btn btn-sm btn-outline-dark rounded-pill px-3" onclick="printReceipt('<?= $r['receipt_no'] ?>', '<?=$r['issue_date'] ?>', '<?= htmlspecialchars(addslashes($r['customer_name'])) ?>', '<?= htmlspecialchars(addslashes($r['item_description'])) ?>', '<?= number_format($r['supply_price']) ?>', '<?= number_format($r['vat_amount']) ?>', '<?= number_format($r['total_amount']) ?>', '<?=$r['payment_method'] ?>');">
+                                    <button type="button" class="btn btn-sm btn-outline-dark rounded-pill px-3" onclick="printReceipt('<?= $r['receipt_no'] ?>', '<?= $r['issue_date'] ?>', '<?= htmlspecialchars(addslashes($r['customer_name'])) ?>', '<?= htmlspecialchars(addslashes($r['item_description'])) ?>', '<?= number_format($r['supply_price']) ?>', '<?= number_format($r['vat_amount']) ?>', '<?= number_format($r['total_amount']) ?>', '<?= $r['payment_method'] ?>');">
                                         <i class="fa-solid fa-print me-1"></i>영수증 인쇄
                                     </button>
                                 </td>
                                 <td class="text-center">
                                     <?php if ($user_role !== 'USER' && !empty($r['id'])): ?>
-                                        <form method="POST" action="receipt_issuer.htm" class="d-inline" onsubmit="return confirm('영수증을 삭제하시겠습니까?');">
-                                            <input type="hidden" name="action" value="delete_receipt">
-                                            <input type="hidden" name="receipt_id" value="<?= (int)$r['id'] ?>">
-                                            <button type="submit" class="btn btn-outline-danger btn-sm rounded-pill px-2 py-0"><i class="fa-solid fa-trash-can"></i></button>
-                                        </form>
+                                        <button type="button" class="btn btn-outline-danger btn-sm rounded-pill px-2 py-0" onclick="triggerDeleteReceipt(<?= (int)$r['id'] ?>, '<?= htmlspecialchars(addslashes($r['receipt_no'])) ?>')" title="삭제">
+                                            <i class="fa-solid fa-trash-can"></i>
+                                        </button>
                                     <?php else: ?>
                                         <span class="text-muted">-</span>
                                     <?php endif; ?>
@@ -290,12 +308,38 @@ require_once 'header.php';
     </div>
 </div>
 
+<!-- 개별 삭제 확인 모달 -->
+<div class="modal fade" id="deleteReceiptModal" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered modal-sm">
+        <div class="modal-content border-0 shadow-lg rounded-4 overflow-hidden">
+            <div class="modal-header bg-danger text-white py-2 px-3">
+                <h6 class="modal-title fw-bold fs-6"><i class="fa-solid fa-trash-can me-1"></i>영수증 삭제</h6>
+                <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+            </div>
+            <form method="POST" action="receipt_issuer.htm">
+                <input type="hidden" name="action" value="delete_receipt">
+                <input type="hidden" name="csrf_token" value="<?= htmlspecialchars($csrf_token) ?>">
+                <input type="hidden" name="receipt_id" id="deleteModalReceiptId" value="">
+                <div class="modal-body p-3 text-center">
+                    <p class="mb-1 text-dark fw-bold" id="deleteModalReceiptText">영수증을 삭제하시겠습니까?</p>
+                    <small class="text-muted">삭제 시 대장에서 영구 제거됩니다.</small>
+                </div>
+                <div class="modal-footer bg-light py-2 px-3 justify-content-center">
+                    <button type="button" class="btn btn-secondary btn-sm rounded-pill px-3" data-bs-dismiss="modal">취소</button>
+                    <button type="submit" class="btn btn-danger btn-sm rounded-pill px-3 fw-bold">삭제 확정</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
 <?php if ($user_role !== 'USER'): ?>
 <div class="modal fade btn-print-hide" id="addReceiptModal" tabindex="-1" aria-hidden="true">
     <div class="modal-dialog modal-dialog-centered">
         <div class="modal-content border-0 shadow-lg rounded-4 overflow-hidden">
             <form method="POST" action="receipt_issuer.htm">
                 <input type="hidden" name="action" value="issue_receipt">
+                <input type="hidden" name="csrf_token" value="<?= htmlspecialchars($csrf_token) ?>">
                 <div class="modal-header bg-primary text-white py-3 px-4">
                     <h5 class="modal-title fs-6 fw-bold text-white"><i class="fa-solid fa-file-invoice me-2"></i>간이영수증 즉시 발행</h5>
                     <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
@@ -349,6 +393,14 @@ function printReceipt(no, date, cust, desc, supply, vat, total, pay) {
     document.getElementById('pr_total').innerText = total + '원';
     document.getElementById('pr_pay').innerText = pay;
     window.print();
+}
+
+function triggerDeleteReceipt(id, no) {
+    document.getElementById('deleteModalReceiptId').value = id;
+    document.getElementById('deleteModalReceiptText').innerText = `"${no}" 영수증을 삭제하시겠습니까?`;
+    if (typeof bootstrap !== 'undefined') {
+        new bootstrap.Modal(document.getElementById('deleteReceiptModal')).show();
+    }
 }
 </script>
 
