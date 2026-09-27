@@ -12,6 +12,11 @@ ob_start();
 
 require_once 'db.php';
 
+if (empty($_SESSION['csrf_token'])) {
+    $_SESSION['csrf_token'] = bin2hex(random_bytes(32));
+}
+$csrf_token = $_SESSION['csrf_token'];
+
 // 1. AJAX 및 파일 다운로드 라우팅
 if (isset($_GET['action'])) {
     
@@ -260,6 +265,12 @@ $user_role = $_SESSION['role'] ?? 'USER';
 
 /* 최고 관리자 전용 사업장 정보 수정 및 삭제 처리 */
 if ($user_role === 'ADMIN' && $_SERVER['REQUEST_METHOD'] === 'POST') {
+    if (!hash_equals($_SESSION['csrf_token'] ?? '', $_POST['csrf_token'] ?? '')) {
+        $_SESSION['flash_error'] = '비정상적인 접근이거나 세션이 만료되었습니다.';
+        header("Location: " . basename($_SERVER['PHP_SELF']));
+        exit;
+    }
+
     if (isset($_POST['admin_edit_store'])) {
         $edit_id = intval($_POST['edit_store_id']);
         $edit_store_name = trim($_POST['edit_store_name']);
@@ -293,6 +304,12 @@ if ($user_role === 'ADMIN' && $_SERVER['REQUEST_METHOD'] === 'POST') {
 
 /* 엑셀 대용량 업로드 처리 */
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['upload_excel'])) {
+    if (!hash_equals($_SESSION['csrf_token'] ?? '', $_POST['csrf_token'] ?? '')) {
+        $_SESSION['flash_error'] = '비정상적인 접근이거나 세션이 만료되었습니다.';
+        header("Location: " . basename($_SERVER['PHP_SELF']));
+        exit;
+    }
+
     if ($user_role === 'USER') {
         $_SESSION['flash_error'] = "일반회원(읽기 전용)은 엑셀 일괄 업로드 권한이 없습니다.";
         header("Location: " . basename($_SERVER['PHP_SELF']));
@@ -360,6 +377,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['upload_excel'])) {
 
 // 신규 사업장 등록 POST 처리
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['add_store'])) {
+    if (!hash_equals($_SESSION['csrf_token'] ?? '', $_POST['csrf_token'] ?? '')) {
+        $_SESSION['flash_error'] = '비정상적인 접근이거나 세션이 만료되었습니다.';
+        header("Location: " . basename($_SERVER['PHP_SELF']));
+        exit;
+    }
+
     if ($user_role === 'USER') {
         $_SESSION['flash_error'] = "일반회원(읽기 전용)은 사업장 신규 등록 권한이 없습니다.";
         header("Location: " . basename($_SERVER['PHP_SELF']));
@@ -442,6 +465,7 @@ $stores = $stmt->fetchAll(PDO::FETCH_ASSOC);
             <div class="card-body p-4">
                 <form method="POST" action="<?= htmlspecialchars(basename($_SERVER['PHP_SELF'])) ?>" enctype="multipart/form-data">
                     <input type="hidden" name="upload_excel" value="1">
+                    <input type="hidden" name="csrf_token" value="<?= htmlspecialchars($csrf_token) ?>">
                     <div class="row g-2 align-items-center">
                         <div class="col-md-9">
                             <input type="file" name="excel_file" class="form-control form-control-responsive" accept=".csv" required <?= $user_role === 'USER' ? 'disabled' : '' ?>>
@@ -508,6 +532,7 @@ $stores = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
                 <form method="POST" action="<?= htmlspecialchars(basename($_SERVER['PHP_SELF'])) ?>">
                     <input type="hidden" name="add_store" value="1">
+                    <input type="hidden" name="csrf_token" value="<?= htmlspecialchars($csrf_token) ?>">
                     <div class="mb-3">
                         <label class="form-label fw-bold form-label-responsive">사업자 등록번호</label>
                         <input type="text" id="biz_no" name="biz_no" class="form-control bg-light form-control-responsive" readonly required placeholder="조회/스캔 시 자동 입력">
@@ -621,6 +646,7 @@ $stores = $stmt->fetchAll(PDO::FETCH_ASSOC);
         <div class="modal-content border-0 shadow-lg" style="border-radius: 18px; overflow: hidden;">
             <form method="POST" action="<?= htmlspecialchars(basename($_SERVER['PHP_SELF'])) ?>">
                 <input type="hidden" name="admin_edit_store" value="1">
+                <input type="hidden" name="csrf_token" value="<?= htmlspecialchars($csrf_token) ?>">
                 <input type="hidden" id="edit_store_id" name="edit_store_id" value="">
                 <div class="modal-header bg-warning text-dark border-0 py-3 px-4">
                     <h5 class="modal-title fw-bold fs-6"><i class="fa-solid fa-pen-to-square me-2"></i>[최고 관리자] 사업장 정보 수정</h5>
@@ -658,6 +684,7 @@ $stores = $stmt->fetchAll(PDO::FETCH_ASSOC);
             </div>
             <form method="POST" action="<?= htmlspecialchars(basename($_SERVER['PHP_SELF'])) ?>">
                 <input type="hidden" name="admin_delete_store" value="1">
+                <input type="hidden" name="csrf_token" value="<?= htmlspecialchars($csrf_token) ?>">
                 <input type="hidden" id="admin_delete_store_id" name="delete_store_id" value="">
                 <div class="modal-body p-4 text-center">
                     <div class="mb-3">
@@ -715,8 +742,6 @@ function uploadOCR() {
 
             const submitBtn = document.getElementById('submitBtn');
             if (submitBtn) submitBtn.disabled = false;
-
-            alert('사업자 정보 및 국세청 상태가 자동으로 100% 채워졌습니다.');
         } else {
             alert(data.message || '인식에 실패했습니다.');
         }
@@ -755,8 +780,6 @@ function fetchStoreAPI() {
                 
                 const submitBtn = document.getElementById('submitBtn');
                 if (submitBtn) submitBtn.disabled = false;
-
-                alert('국세청 API 검증 및 조회가 완료되었습니다.');
             } else {
                 alert(data.message || '조회에 실패했습니다.');
             }
