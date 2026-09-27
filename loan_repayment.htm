@@ -16,7 +16,12 @@ if (!isset($_SESSION['user_id'])) {
 }
 
 $user_id = (int)$_SESSION['user_id'];
-$user_role =$_SESSION['role'] ?? 'USER';
+$user_role = $_SESSION['role'] ?? 'USER';
+
+if (empty($_SESSION['csrf_token'])) {
+    $_SESSION['csrf_token'] = bin2hex(random_bytes(32));
+}
+$csrf_token = $_SESSION['csrf_token'];
 
 try {
     $pdo->exec("
@@ -56,7 +61,14 @@ try {
 } catch (Exception $e) {}
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
-    if ($user_role === 'USER') {$_SESSION['flash_err'] = '일반회원은 대출 스케줄 등록 권한이 없습니다.';
+    if (!hash_equals($_SESSION['csrf_token'] ?? '', $_POST['csrf_token'] ?? '')) {
+        $_SESSION['flash_err'] = '비정상적인 요청이거나 세션이 만료되었습니다.';
+        header("Location: loan_repayment.htm");
+        exit;
+    }
+
+    if ($user_role === 'USER') {
+        $_SESSION['flash_err'] = '일반회원은 대출 스케줄 등록 권한이 없습니다.';
         header("Location: loan_repayment.htm");
         exit;
     }
@@ -68,28 +80,31 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
         $term = max(6, intval($_POST['loan_term_months'] ?? 36));
         $grace = max(0, intval($_POST['grace_period_months'] ?? 12));
 
-        // 원리금 균등분할 상환 공식
-        $repay_term = max(1, $term -$grace);
+        $repay_term = max(1, $term - $grace);
         $m_rate = ($rate / 100) / 12;
-        $monthly_pay = round(($principal * $m_rate * pow(1 + $m_rate,$repay_term)) / (pow(1 + $m_rate,$repay_term) - 1));
+        $monthly_pay = round(($principal * $m_rate * pow(1 + $m_rate, $repay_term)) / (pow(1 + $m_rate, $repay_term) - 1));
 
         if (!empty($l_name)) {
             try {
-                $ins =$pdo->prepare("
+                $ins = $pdo->prepare("
                     INSERT INTO store_loan_schedules 
                     (user_id, loan_name, principal_amount, interest_rate, loan_term_months, grace_period_months, monthly_payment) 
                     VALUES (?, ?, ?, ?, ?, ?, ?)
                 ");
-                $ins->execute([$user_id,$l_name, $principal,$rate, $term,$grace, $monthly_pay]);$_SESSION['flash_msg'] = "대출 상환 스케줄이 성공적으로 등록되었습니다.";
-            } catch (PDOException $e) {$_SESSION['flash_err'] = '대출 스케줄 저장 중 오류가 발생했습니다.';
+                $ins->execute([$user_id, $l_name, $principal, $rate, $term, $grace, $monthly_pay]);
+                $_SESSION['flash_msg'] = "대출 상환 스케줄이 성공적으로 등록되었습니다.";
+            } catch (PDOException $e) {
+                $_SESSION['flash_err'] = '대출 스케줄 저장 중 오류가 발생했습니다.';
             }
         }
     } elseif ($_POST['action'] === 'delete_loan') {
         $del_id = intval($_POST['loan_id'] ?? 0);
         try {
-            $del =$pdo->prepare("DELETE FROM store_loan_schedules WHERE id = ? AND user_id = ?");
-            $del->execute([$del_id, $user_id]);$_SESSION['flash_msg'] = '선택하신 대출 스케줄이 삭제되었습니다.';
-        } catch (PDOException $e) {$_SESSION['flash_err'] = '삭제 중 오류가 발생했습니다.';
+            $del = $pdo->prepare("DELETE FROM store_loan_schedules WHERE id = ? AND user_id = ?");
+            $del->execute([$del_id, $user_id]);
+            $_SESSION['flash_msg'] = '선택하신 대출 스케줄이 삭제되었습니다.';
+        } catch (PDOException $e) {
+            $_SESSION['flash_err'] = '삭제 중 오류가 발생했습니다.';
         }
     }
 
@@ -97,21 +112,23 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
     exit;
 }
 
-$flash_msg =$_SESSION['flash_msg'] ?? '';
-$flash_err =$_SESSION['flash_err'] ?? '';
-unset($_SESSION['flash_msg'],$_SESSION['flash_err']);
+$flash_msg = $_SESSION['flash_msg'] ?? '';
+$flash_err = $_SESSION['flash_err'] ?? '';
+unset($_SESSION['flash_msg'], $_SESSION['flash_err']);
 
-$loans = [];$total_monthly_debt = 0;
+$loans = [];
+$total_monthly_debt = 0;
 try {
-    $stmt =$pdo->prepare("SELECT * FROM store_loan_schedules WHERE user_id = ? ORDER BY id DESC");
+    $stmt = $pdo->prepare("SELECT * FROM store_loan_schedules WHERE user_id = ? ORDER BY id DESC");
     $stmt->execute([$user_id]);
-    $loans =$stmt->fetchAll(PDO::FETCH_ASSOC);
-    foreach ($loans as$l) {
+    $loans = $stmt->fetchAll(PDO::FETCH_ASSOC);
+    foreach ($loans as $l) {
         $total_monthly_debt += (int)$l['monthly_payment'];
     }
 } catch (PDOException $e) {}
 
-if (empty($loans)) {$loans = [
+if (empty($loans)) {
+    $loans = [
         [
             'id' => 0, 'loan_name' => '소상공인시장진흥공단 정책자금 희망대출', 'principal_amount' => 30000000,
             'interest_rate' => 2.50, 'loan_term_months' => 60, 'grace_period_months' => 24,
@@ -193,7 +210,7 @@ require_once 'header.php';
 <div class="row mb-4">
     <div class="col-12">
         <div class="glass-card p-4">
-            <h5 class="fw-bold mb-3 text-dark"><i class="fa-solid fa-list-check me-2 text-primary"></i>등록 대출별 월 원리금 상환 현황</h5>
+            <h5 class="fw-bold mb-3 text-dark"><i class="fa-solid fa-list-check text-primary me-2"></i>등록 대출별 월 원리금 상환 현황</h5>
             <div class="loan-scroll-wrapper">
                 <table class="table table-hover align-middle loan-detail-table mb-0">
                     <thead class="table-light">
@@ -207,7 +224,7 @@ require_once 'header.php';
                         </tr>
                     </thead>
                     <tbody class="small">
-                        <?php foreach ($loans as$l): ?>
+                        <?php foreach ($loans as $l): ?>
                             <tr>
                                 <td class="fw-bold text-dark"><?= htmlspecialchars($l['loan_name']) ?></td>
                                 <td class="text-end fw-semibold"><?= number_format($l['principal_amount']) ?>원</td>
@@ -216,11 +233,9 @@ require_once 'header.php';
                                 <td class="text-end fw-bold text-primary fs-6"><?= number_format($l['monthly_payment']) ?>원/월</td>
                                 <td class="text-center">
                                     <?php if ($user_role !== 'USER' && !empty($l['id'])): ?>
-                                        <form method="POST" action="loan_repayment.htm" class="d-inline" onsubmit="return confirm('이 대출 스케줄을 삭제하시겠습니까?');">
-                                            <input type="hidden" name="action" value="delete_loan">
-                                            <input type="hidden" name="loan_id" value="<?= (int)$l['id'] ?>">
-                                            <button type="submit" class="btn btn-outline-danger btn-sm rounded-pill px-2 py-0"><i class="fa-solid fa-trash-can"></i></button>
-                                        </form>
+                                        <button type="button" class="btn btn-outline-danger btn-sm rounded-pill px-2 py-0" onclick="triggerDeleteLoan(<?= (int)$l['id'] ?>, '<?= htmlspecialchars(addslashes($l['loan_name'])) ?>')" title="삭제">
+                                            <i class="fa-solid fa-trash-can"></i>
+                                        </button>
                                     <?php else: ?>
                                         <span class="text-muted">-</span>
                                     <?php endif; ?>
@@ -234,12 +249,38 @@ require_once 'header.php';
     </div>
 </div>
 
+<!-- 개별 삭제 확인 모달 -->
+<div class="modal fade" id="deleteLoanModal" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered modal-sm">
+        <div class="modal-content border-0 shadow-lg rounded-4 overflow-hidden">
+            <div class="modal-header bg-danger text-white py-2 px-3">
+                <h6 class="modal-title fw-bold fs-6"><i class="fa-solid fa-trash-can me-1"></i>대출 스케줄 삭제</h6>
+                <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+            </div>
+            <form method="POST" action="loan_repayment.htm">
+                <input type="hidden" name="action" value="delete_loan">
+                <input type="hidden" name="csrf_token" value="<?= htmlspecialchars($csrf_token) ?>">
+                <input type="hidden" name="loan_id" id="deleteModalLoanId" value="">
+                <div class="modal-body p-3 text-center">
+                    <p class="mb-1 text-dark fw-bold" id="deleteModalLoanText">대출 스케줄을 삭제하시겠습니까?</p>
+                    <small class="text-muted">삭제 시 상환 목록에서 즉시 제거됩니다.</small>
+                </div>
+                <div class="modal-footer bg-light py-2 px-3 justify-content-center">
+                    <button type="button" class="btn btn-secondary btn-sm rounded-pill px-3" data-bs-dismiss="modal">취소</button>
+                    <button type="submit" class="btn btn-danger btn-sm rounded-pill px-3 fw-bold">삭제 확정</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
 <?php if ($user_role !== 'USER'): ?>
 <div class="modal fade" id="addLoanModal" tabindex="-1" aria-hidden="true">
     <div class="modal-dialog modal-dialog-centered">
         <div class="modal-content border-0 shadow-lg rounded-4 overflow-hidden">
             <form method="POST" action="loan_repayment.htm">
                 <input type="hidden" name="action" value="add_loan">
+                <input type="hidden" name="csrf_token" value="<?= htmlspecialchars($csrf_token) ?>">
                 <div class="modal-header bg-primary text-white py-3 px-4">
                     <h5 class="modal-title fs-6 fw-bold text-white"><i class="fa-solid fa-credit-card me-2"></i>사업자 대출 스케줄 등록</h5>
                     <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
@@ -277,6 +318,16 @@ require_once 'header.php';
     </div>
 </div>
 <?php endif; ?>
+
+<script>
+function triggerDeleteLoan(id, name) {
+    document.getElementById('deleteModalLoanId').value = id;
+    document.getElementById('deleteModalLoanText').innerText = `"${name}" 스케줄을 삭제하시겠습니까?`;
+    if (typeof bootstrap !== 'undefined') {
+        new bootstrap.Modal(document.getElementById('deleteLoanModal')).show();
+    }
+}
+</script>
 
 <?php
 include_once 'footer.php';

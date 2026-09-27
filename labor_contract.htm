@@ -20,8 +20,12 @@ $user_id = (int)$_SESSION['user_id'];
 $user_role = $_SESSION['role'] ?? 'USER';
 $store_name = $_SESSION['store_name'] ?? '내 사업장';
 
-// 법정 최저시급 기준 적용
 $min_wage = 10030;
+
+if (empty($_SESSION['csrf_token'])) {
+    $_SESSION['csrf_token'] = bin2hex(random_bytes(32));
+}
+$csrf_token = $_SESSION['csrf_token'];
 
 try {
     $pdo->exec("
@@ -40,6 +44,12 @@ try {
 } catch (PDOException $e) {}
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
+    if (!hash_equals($_SESSION['csrf_token'] ?? '', $_POST['csrf_token'] ?? '')) {
+        $_SESSION['flash_err'] = '비정상적인 접근이거나 세션이 만료되었습니다.';
+        header("Location: labor_contract.htm");
+        exit;
+    }
+
     if ($user_role === 'USER') {
         $_SESSION['flash_err'] = '일반회원은 계약서 생성 및 삭제 권한이 없습니다.';
         header("Location: labor_contract.htm");
@@ -187,11 +197,9 @@ require_once 'header.php';
                                 </td>
                                 <td class="text-center">
                                     <?php if ($user_role !== 'USER' && !empty($c['id'])): ?>
-                                        <form method="POST" action="labor_contract.htm" class="d-inline" onsubmit="return confirm('이 계약서를 삭제하시겠습니까?');">
-                                            <input type="hidden" name="action" value="delete_contract">
-                                            <input type="hidden" name="contract_id" value="<?= (int)$c['id'] ?>">
-                                            <button type="submit" class="btn btn-outline-danger btn-sm rounded-pill px-2 py-0"><i class="fa-solid fa-trash-can"></i></button>
-                                        </form>
+                                        <button type="button" class="btn btn-outline-danger btn-sm rounded-pill px-2 py-0" onclick="triggerDeleteContract(<?= (int)$c['id'] ?>, '<?= htmlspecialchars(addslashes($c['employee_name'])) ?>')" title="삭제">
+                                            <i class="fa-solid fa-trash-can"></i>
+                                        </button>
                                     <?php else: ?>
                                         <span class="text-muted">-</span>
                                     <?php endif; ?>
@@ -236,12 +244,38 @@ require_once 'header.php';
     </div>
 </div>
 
+<!-- 개별 삭제 확인 모달 -->
+<div class="modal fade" id="deleteContractModal" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered modal-sm">
+        <div class="modal-content border-0 shadow-lg rounded-4 overflow-hidden">
+            <div class="modal-header bg-danger text-white py-2 px-3">
+                <h6 class="modal-title fw-bold fs-6"><i class="fa-solid fa-trash-can me-1"></i>계약서 삭제</h6>
+                <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+            </div>
+            <form method="POST" action="labor_contract.htm">
+                <input type="hidden" name="action" value="delete_contract">
+                <input type="hidden" name="csrf_token" value="<?= htmlspecialchars($csrf_token) ?>">
+                <input type="hidden" name="contract_id" id="deleteModalContractId" value="">
+                <div class="modal-body p-3 text-center">
+                    <p class="mb-1 text-dark fw-bold" id="deleteModalContractText">계약서를 삭제하시겠습니까?</p>
+                    <small class="text-muted">삭제 시 대장에서 영구히 제거됩니다.</small>
+                </div>
+                <div class="modal-footer bg-light py-2 px-3 justify-content-center">
+                    <button type="button" class="btn btn-secondary btn-sm rounded-pill px-3" data-bs-dismiss="modal">취소</button>
+                    <button type="submit" class="btn btn-danger btn-sm rounded-pill px-3 fw-bold">삭제 확정</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
 <?php if ($user_role !== 'USER'): ?>
 <div class="modal fade btn-print-hide" id="addContractModal" tabindex="-1" aria-hidden="true">
     <div class="modal-dialog modal-dialog-centered">
         <div class="modal-content border-0 shadow-lg rounded-4 overflow-hidden">
             <form method="POST" action="labor_contract.htm">
                 <input type="hidden" name="action" value="save_contract">
+                <input type="hidden" name="csrf_token" value="<?= htmlspecialchars($csrf_token) ?>">
                 <div class="modal-header bg-primary text-white py-3 px-4">
                     <h5 class="modal-title fs-6 fw-bold text-white"><i class="fa-solid fa-file-signature me-2"></i>표준근로계약서 작성</h5>
                     <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
@@ -285,6 +319,14 @@ function bindContractToPaper(name, start, wage, hours) {
     document.getElementById('pc_hours').innerText = hours;
     document.getElementById('pc_sign').innerText = name;
     window.print();
+}
+
+function triggerDeleteContract(id, name) {
+    document.getElementById('deleteModalContractId').value = id;
+    document.getElementById('deleteModalContractText').innerText = `"${name}" 근로계약서를 삭제하시겠습니까?`;
+    if (typeof bootstrap !== 'undefined') {
+        new bootstrap.Modal(document.getElementById('deleteContractModal')).show();
+    }
 }
 </script>
 
