@@ -1,0 +1,565 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>고객센터 | 나오빌리</title>
+    <!-- Bootstrap 5 CSS -->
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <!-- FontAwesome Icons -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <!-- Pretendard WebFont -->
+    <link rel="stylesheet" as="style" crossorigin href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.min.css" />
+    
+    <!-- [REFACTORED - 고객지원 센터 고신뢰 스타일링] -->
+    <style>
+        body {
+            background-color: #f8fafc;
+            color: #1e293b;
+            font-family: 'Pretendard', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            line-height: 1.7;
+            letter-spacing: -0.015em;
+        }
+
+        ::-webkit-scrollbar { width: 8px; }
+        ::-webkit-scrollbar-track { background: #f1f5f9; }
+        ::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 4px; }
+        ::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
+
+        .cs-header-section {
+            background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%);
+            color: #ffffff;
+            padding: 80px 0 70px;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+            position: relative;
+        }
+        .cs-container {
+            max-width: 1040px;
+            margin: -40px auto 60px;
+            position: relative;
+            z-index: 10;
+        }
+        .contact-card {
+            background: #ffffff;
+            border-radius: 18px;
+            border: 1px solid #e2e8f0;
+            padding: 32px 26px;
+            box-shadow: 0 4px 16px rgba(15, 23, 42, 0.04);
+            height: 100%;
+            transition: transform 0.2s cubic-bezier(0.16, 1, 0.3, 1), box-shadow 0.2s ease;
+        }
+        .contact-card:hover {
+            transform: translateY(-4px);
+            box-shadow: 0 12px 24px rgba(15, 23, 42, 0.08);
+        }
+		
+        .contact-card h4 a,
+        .contact-card h5 a {
+            text-decoration: none !important;
+            color: inherit !important;
+            cursor: pointer;
+        }
+
+        .icon-circle {
+            width: 52px;
+            height: 52px;
+            border-radius: 14px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 1.35rem;
+            margin-bottom: 18px;
+        }
+        .form-card {
+            background: #ffffff;
+            border-radius: 18px;
+            border: 1px solid #e2e8f0;
+            padding: 38px 32px;
+            box-shadow: 0 4px 16px rgba(15, 23, 42, 0.04);
+        }
+        .accordion-button {
+            border-radius: 12px !important;
+            padding: 1.1rem 1.25rem;
+            font-size: 0.95rem;
+            font-weight: 600;
+        }
+        .accordion-button:not(.collapsed) {
+            background-color: #eff6ff;
+            color: #2563eb;
+        }
+        .accordion-button:focus {
+            box-shadow: none;
+            border-color: rgba(37, 99, 235, 0.2);
+        }
+        .accordion-item {
+            border: 1px solid #e2e8f0;
+            border-radius: 12px !important;
+            margin-bottom: 12px;
+            overflow: hidden;
+        }
+
+        /* 개인정보 동의 체크박스 정렬 박스 */
+        .privacy-consent-box {
+            background-color: #f8fafc;
+            border: 1px solid #e2e8f0;
+            border-radius: 12px;
+            padding: 16px 20px;
+        }
+        .privacy-consent-box .form-check {
+            padding-left: 1.85rem !important;
+            margin: 0 !important;
+        }
+        .privacy-consent-box .form-check-input {
+            float: left;
+            margin-left: -1.85rem !important;
+            margin-top: 0.25rem;
+            cursor: pointer;
+            width: 1.15rem;
+            height: 1.15rem;
+        }
+        .privacy-consent-box .form-check-label {
+            cursor: pointer;
+            line-height: 1.55;
+            display: block;
+        }
+
+        /* 모달 내부 팝업 화면 볼 때 여백 최적화 */
+        body.in-modal-mode .navbar {
+            display: none !important;
+        }
+        body.in-modal-mode .cs-header-section {
+            padding: 32px 20px 28px !important;
+        }
+        body.in-modal-mode .cs-header-section h1 {
+            font-size: 1.6rem !important;
+        }
+        body.in-modal-mode .cs-container {
+            margin: -15px auto 30px !important;
+            padding: 0 20px !important;
+            max-width: 100% !important;
+            box-sizing: border-box !important;
+        }
+        body.in-modal-mode .contact-card, 
+        body.in-modal-mode .form-card {
+            padding: 24px 20px !important;
+        }
+
+        @media (max-width: 768px) {
+            .cs-header-section {
+                padding: 50px 15px 55px;
+            }
+            .cs-container {
+                margin-top: -25px;
+                padding: 0 15px;
+            }
+            .form-card, .contact-card {
+                padding: 24px 20px;
+            }
+        }
+
+        @media print {
+            @page {
+                size: A4;
+                margin: 15mm 15mm 15mm 15mm;
+            }
+            body {
+                background: #ffffff !important;
+                color: #000000 !important;
+            }
+            .navbar, #csFooterWrapper, .form-card, #inquiryForm {
+                display: none !important;
+            }
+            .cs-container {
+                max-width: 100% !important;
+                width: 100% !important;
+                margin: 0 !important;
+                padding: 0 !important;
+            }
+            .contact-card {
+                box-shadow: none !important;
+                border: 1pt solid #ccc !important;
+                break-inside: avoid;
+            }
+        }
+    </style>
+</head>
+<body>
+
+<nav class="navbar navbar-expand-lg bg-white border-bottom sticky-top py-3">
+    <div class="container" style="max-width: 1040px;">
+        <a class="navbar-brand fw-bold text-primary d-flex align-items-center" href="/" target="_top">
+            <i class="fa-solid fa-chart-pie me-2 fs-4"></i> 나오빌리
+        </a>
+        <div class="d-flex align-items-center gap-2">
+            <a href="/" target="_top" class="btn btn-outline-secondary btn-sm rounded-pill px-3">
+                <i class="fa-solid fa-house me-1"></i> 메인 홈
+            </a>
+            <a href="/dashboard.htm" target="_top" class="btn btn-primary btn-sm rounded-pill px-3 fw-semibold">
+                <i class="fa-solid fa-gauge-high me-1"></i> 대시보드
+            </a>
+        </div>
+    </div>
+</nav>
+
+<section class="cs-header-section text-center">
+    <div class="container" style="max-width: 800px;">
+        <span class="badge bg-primary-subtle text-primary rounded-pill px-3 py-2 mb-3 fw-semibold">
+            <i class="fa-solid fa-headset me-1"></i> 고객 지원 센터
+        </span>
+        <h1 class="display-6 fw-bold mb-2">무엇을 도와드릴까요?</h1>
+        <p class="text-white-50 small mb-0" style="font-size: 1rem;">
+            서비스 이용 중 궁금하신 점이나 API 연동 관련 문의사항을 신속하게 해결해 드립니다.
+        </p>
+    </div>
+</section>
+
+<div class="container cs-container">
+
+    <div class="row g-4 mb-5">
+        <div class="col-md-4">
+            <div class="contact-card">
+                <div class="icon-circle bg-primary bg-opacity-10 text-primary">
+                    <i class="fa-solid fa-phone-volume"></i>
+                </div>
+                <h5 class="fw-bold text-dark mb-1">전화 상담 문의</h5>
+                <p class="text-muted small mb-2">전문 상담원이 친절히 안내합니다.</p>
+                <h4 class="fw-bold text-primary mb-2"><a href="tel:0507-1319-3897">0507-1319-3897</a></h4>
+                <div class="text-xs text-muted" style="font-size: 0.82rem;">
+                    평일 10:00 ~ 18:00 (점심 12:30 ~ 13:30)<br>주말 및 공휴일 휴무
+                </div>
+            </div>
+        </div>
+
+        <div class="col-md-4">
+            <div class="contact-card">
+                <div class="icon-circle bg-success bg-opacity-10 text-success">
+                    <i class="fa-solid fa-envelope-open-text"></i>
+                </div>
+                <h5 class="fw-bold text-dark mb-1">이메일 기술 지원</h5>
+                <p class="text-muted small mb-2">API 연동 및 계정 관련 서면 문의</p>
+                <h5 class="fw-bold text-success mb-2"><a href="mailto:naobilly123@naver.com">naobilly123@naver.com</a></h5>
+                <div class="text-xs text-muted" style="font-size: 0.82rem;">
+                    24시간 접수 가능<br>영업일 기준 24시간 이내 회신
+                </div>
+            </div>
+        </div>
+
+        <div class="col-md-4">
+            <div class="contact-card">
+                <div class="icon-circle bg-warning bg-opacity-10 text-warning">
+                    <i class="fa-solid fa-comment-dots"></i>
+                </div>
+                <h5 class="fw-bold text-dark mb-1">카카오톡 실시간 상담</h5>
+                <p class="text-muted small mb-2">모바일로 빠르게 문의하세요.</p>
+                <div class="mt-2">
+                    <a href="http://pf.kakao.com/_xoKpFxj" class="btn btn-warning btn-sm rounded-pill fw-bold text-dark px-3" target="_blank">
+                        <i class="fa-solid fa-comment me-1"></i> 카카오톡 채널 추가
+                    </a>
+                </div>
+                <div class="text-xs text-muted mt-2" style="font-size: 0.82rem;">
+                    카카오톡 채널: @나오빌리
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="mb-5">
+        <div class="d-flex align-items-center mb-3">
+            <h4 class="fw-bold text-dark mb-0"><i class="fa-solid fa-circle-question text-primary me-2"></i>자주 묻는 질문 (FAQ)</h4>
+        </div>
+        <div class="accordion" id="faqAccordion">
+            <div class="accordion-item">
+                <h2 class="accordion-header">
+                    <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse" data-bs-target="#faq1">
+                        Q. 국세청 홈택스 및 배달 플랫폼 연동은 안전한가요?
+                    </button>
+                </h2>
+                <div id="faq1" class="accordion-collapse collapse" data-bs-parent="#faqAccordion">
+                    <div class="accordion-body small text-secondary">
+                        네, 안심하셔도 됩니다. 나오빌리는 엔터프라이즈 보안 기준을 갖춘 네이버클라우드(주) 인프라 위에서 구동되며, 통신 전 구간에 걸쳐 고도화된 SSL 암호화 방식을 사용합니다. 수집된 인증 키는 오직 매출 통계 조회 목적으로만 안전하게 분리 저장됩니다.
+                    </div>
+                </div>
+            </div>
+            <div class="accordion-item">
+                <h2 class="accordion-header">
+                    <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse" data-bs-target="#faq2">
+                        Q. 대시보드의 순이익과 실제 통장 입금액에 차이가 있는 이유는 무엇인가요?
+                    </button>
+                </h2>
+                <div id="faq2" class="accordion-collapse collapse" data-bs-parent="#faqAccordion">
+                    <div class="accordion-body small text-secondary">
+                        나오빌리는 카드 수수료율(1.3%), 배달 3사 중개 수수료, 고정비(월세/인건비) 및 설정하신 원가율을 기반으로 실질 순수익을 정밀 추정합니다. 배달 플랫폼의 입금 주기(주정산, 일일정산 지연)나 프로모션 할인 분담금 차이로 인해 일시적인 오차가 발생할 수 있으니, 매장 설정에서 고정비 항목을 최신 상태로 유지해 주시기 바랍니다.
+                    </div>
+                </div>
+            </div>
+            <div class="accordion-item">
+                <h2 class="accordion-header">
+                    <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse" data-bs-target="#faq3">
+                        Q. 여러 개의 매장(다중 사업자)을 동시에 등록하고 관리할 수 있나요?
+                    </button>
+                </h2>
+                <div id="faq3" class="accordion-collapse collapse" data-bs-parent="#faqAccordion">
+                    <div class="accordion-body small text-secondary">
+                        네, 가능합니다. [매장 관리] 메뉴에서 복수의 사업자등록번호를 등록하시면 상단 매장 전환 스위처를 통해 매장별 순이익 대시보드를 독립적으로 조회하거나 통합 모드로 모니터링할 수 있습니다.
+                    </div>
+                </div>
+            </div>
+            <div class="accordion-item">
+                <h2 class="accordion-header">
+                    <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse" data-bs-target="#faq4">
+                        Q. 서비스 해지 및 환불 절차는 어떻게 되나요?
+                    </button>
+                </h2>
+                <div id="faq4" class="accordion-collapse collapse" data-bs-parent="#faqAccordion">
+                    <div class="accordion-body small text-secondary">
+                        이용약관 제9조에 의거하여 결제 후 7일 이내 데이터 열람 및 사용 이력이 없는 경우 전액 환불이 가능합니다. 중도 해지 시에는 실제 이용 일수를 차감 정산한 잔여액이 환급되며, 고객센터 1:1 문의를 통해 신청하시면 영업일 기준 3일 이내에 처리됩니다.
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="form-card">
+        <h4 class="fw-bold text-dark mb-1"><i class="fa-solid fa-paper-plane text-primary me-2"></i>1:1 온라인 문의 접수</h4>
+        <p class="text-muted small mb-4">내용을 남겨주시면 담당자가 확인 후 등록하신 이메일 또는 연락처로 신속히 답변드리겠습니다.</p>
+        
+        <div id="inquiryAlertBox" style="display: none;" class="alert mb-3"></div>
+
+        <form id="inquiryForm" enctype="multipart/form-data" onsubmit="handleInquirySubmit(event)">
+            <div class="row g-3">
+                <div class="col-md-6">
+                    <label class="form-label small fw-semibold">상호명 / 성명 <span class="text-danger">*</span></label>
+                    <input type="text" name="author_name" class="form-control" placeholder="예: 나오빌리 / 홍길동" required>
+                </div>
+                <div class="col-md-6">
+                    <label class="form-label small fw-semibold">회신받으실 이메일 <span class="text-danger">*</span></label>
+                    <input type="email" name="email" class="form-control" placeholder="name@example.com" required>
+                </div>
+                <div class="col-md-6">
+                    <label class="form-label small fw-semibold">연락처</label>
+                    <input type="tel" name="phone" class="form-control" placeholder="010-0000-0000">
+                </div>
+                <div class="col-md-6">
+                    <label class="form-label small fw-semibold">문의 유형 <span class="text-danger">*</span></label>
+                    <select name="inquiry_type" class="form-select" required>
+                        <option value="" selected disabled>문의 유형을 선택해주세요</option>
+                        <option value="api">API 연동 및 동기화 오류</option>
+                        <option value="calc">정산 및 순이익 산출 문의</option>
+                        <option value="account">계정 및 사업자 정보 변경</option>
+                        <option value="billing">유료 결제 및 세금계산서</option>
+                        <option value="etc">기타 제휴 및 일반 문의</option>
+                    </select>
+                </div>
+                <div class="col-12">
+                    <label class="form-label small fw-semibold">문의 내용 <span class="text-danger">*</span></label>
+                    <textarea name="message" class="form-control" rows="5" placeholder="발생한 문제 상황이나 문의사항을 구체적으로 적어주시면 더 빠른 확인이 가능합니다." required></textarea>
+                </div>
+
+                <!-- 다중 첨부파일 업로드 및 실시간 선택 현황 UI -->
+                <div class="col-12">
+                    <label class="form-label small fw-semibold d-flex justify-content-between align-items-center">
+                        <span><i class="fa-solid fa-paperclip me-1 text-primary"></i>첨부파일 (최대 5개 복수 선택 가능, 선택사항)</span>
+                    </label>
+                    <input type="file" name="attachments[]" id="attachmentInput" class="form-control form-control-sm" multiple accept=".jpg,.jpeg,.png,.gif,.webp,.pdf,.zip,.hwp,.hwpx,.doc,.docx,.xls,.xlsx,.txt" onchange="handleFileSelection(this)">
+                    <div id="fileSelectionNotice" class="text-primary small mt-1 fw-semibold" style="display: none; font-size: 0.8rem;"></div>
+                    <div class="form-text text-muted" style="font-size: 0.78rem;">
+                        오류 화면 캡처 또는 관련 문서를 한 번에 여러 개 선택(Ctrl 또는 Shift 키 누르고 선택)하여 첨부할 수 있습니다.
+                    </div>
+                </div>
+
+                <!-- 개인정보 수집 및 이용 동의 박스 (체크박스 정렬 완벽 보장) -->
+                <div class="col-12">
+                    <div class="privacy-consent-box">
+                        <div class="form-check">
+                            <input class="form-check-input" type="checkbox" name="privacy" id="privacyCheck" value="1" required>
+                            <label class="form-check-label small text-dark fw-semibold" for="privacyCheck">
+                                문의 접수 및 상담 처리를 위한 <a href="/privacy.htm" target="_blank" class="text-decoration-underline text-primary">개인정보 수집 및 이용</a>에 동의합니다. <span class="text-danger">*</span>
+                            </label>
+                        </div>
+                        <div class="text-muted small mt-2 ps-4" style="font-size: 0.76rem; line-height: 1.55;">
+                            ※ 수집 항목: 상호명/성명, 이메일, 연락처, 문의내용 및 첨부파일 | 보유 및 이용기간: 문의 처리 완료 후 관련 법령에 따라 안전하게 보관 후 파기
+                        </div>
+                    </div>
+                </div>
+
+                <div class="col-12 text-end mt-4">
+                    <button type="submit" id="btnInquirySubmit" class="btn btn-primary rounded-pill px-4 fw-semibold shadow-sm">
+                        <i class="fa-solid fa-check me-1"></i> 문의 접수하기
+                    </button>
+                </div>
+            </div>
+        </form>
+    </div>
+
+</div>
+
+<div id="csFooterWrapper">
+<?php
+	include_once 'footer.php';
+?>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+<script>
+    // 첨부파일 선택 시 실시간 개수 및 합산 용량 표시
+    function handleFileSelection(input) {
+        const notice = document.getElementById('fileSelectionNotice');
+        if (!notice) return;
+
+        if (input.files && input.files.length > 0) {
+            let totalBytes = 0;
+            for (let i = 0; i < input.files.length; i++) {
+                totalBytes += input.files[i].size;
+            }
+            const mb = (totalBytes / (1024 * 1024)).toFixed(2);
+            notice.style.display = 'block';
+            notice.innerHTML = `<i class="fa-solid fa-circle-check me-1"></i> 총 ${input.files.length}개의 파일 선택됨 (${mb} MB)`;
+        } else {
+            notice.style.display = 'none';
+        }
+    }
+
+    // 고화질 이미지 업로드 시 서버 제한 용량 초과 방지를 위한 브라우저 단 자동 최적화(압축) 함수
+    async function compressImageFile(file) {
+        // 이미지가 아니거나 800KB 이하인 경우 원본 그대로 반환
+        if (!file.type.startsWith('image/') || file.size <= 800 * 1024) {
+            return file;
+        }
+
+        return new Promise((resolve) => {
+            const reader = new FileReader();
+            reader.onload = function(e) {
+                const img = new Image();
+                img.onload = function() {
+                    let width = img.width;
+                    let height = img.height;
+                    const maxDim = 1920; // FHD 최적화
+
+                    if (width > maxDim || height > maxDim) {
+                        if (width > height) {
+                            height = Math.round((height * maxDim) / width);
+                            width = maxDim;
+                        } else {
+                            width = Math.round((width * maxDim) / height);
+                            height = maxDim;
+                        }
+                    }
+
+                    const canvas = document.createElement('canvas');
+                    canvas.width = width;
+                    canvas.height = height;
+                    const ctx = canvas.getContext('2d');
+                    ctx.drawImage(img, 0, 0, width, height);
+
+                    // JPEG 포맷으로 82% 고품질 압축 (화질 저하 없음)
+                    canvas.toBlob(function(blob) {
+                        if (blob && blob.size < file.size) {
+                            const newFile = new File([blob], file.name, {
+                                type: 'image/jpeg',
+                                lastModified: Date.now()
+                            });
+                            resolve(newFile);
+                        } else {
+                            resolve(file);
+                        }
+                    }, 'image/jpeg', 0.82);
+                };
+                img.onerror = () => resolve(file);
+                img.src = e.target.result;
+            };
+            reader.onerror = () => resolve(file);
+            reader.readAsDataURL(file);
+        });
+    }
+
+    // 폼 전송 비동기 처리 및 사전 엄격 유효성 검사
+    async function handleInquirySubmit(event) {
+        event.preventDefault();
+        
+        const form = event.target;
+        const submitBtn = document.getElementById('btnInquirySubmit');
+        const alertBox = document.getElementById('inquiryAlertBox');
+        const fileInput = document.getElementById('attachmentInput');
+
+        if (fileInput && fileInput.files.length > 5) {
+            alertBox.style.display = 'block';
+            alertBox.className = 'alert alert-danger py-2 px-3 small rounded-3';
+            alertBox.innerHTML = '<i class="fa-solid fa-circle-exclamation me-2"></i>첨부파일은 최대 5개까지만 등록할 수 있습니다.';
+            return;
+        }
+
+        submitBtn.disabled = true;
+        const originalBtnHtml = submitBtn.innerHTML;
+        submitBtn.innerHTML = '<span class="spinner-border spinner-border-sm me-2" role="status" aria-hidden="true"></span>첨부파일 최적화 및 전송 중...';
+
+        alertBox.style.display = 'none';
+        alertBox.className = 'alert mb-3';
+
+        // FormData 구성 및 이미지 자동 최적화 적용
+        const formData = new FormData();
+        formData.append('author_name', form.author_name.value);
+        formData.append('email', form.email.value);
+        formData.append('phone', form.phone.value);
+        formData.append('inquiry_type', form.inquiry_type.value);
+        formData.append('message', form.message.value);
+        if (form.privacy.checked) {
+            formData.append('privacy', '1');
+        }
+
+        // 첨부파일 5개 압축 변환 후 FormData에 각각 추가
+        if (fileInput && fileInput.files.length > 0) {
+            for (let i = 0; i < fileInput.files.length; i++) {
+                const originalFile = fileInput.files[i];
+                const optimizedFile = await compressImageFile(originalFile);
+                formData.append('attachments[]', optimizedFile, originalFile.name);
+            }
+        }
+
+        try {
+            const response = await fetch('api_inquiry.php', {
+                method: 'POST',
+                body: formData
+            });
+
+            const result = await response.json();
+
+            alertBox.style.display = 'block';
+            if (result.success) {
+                alertBox.className = 'alert alert-success py-2 px-3 small rounded-3';
+                alertBox.innerHTML = '<i class="fa-solid fa-circle-check me-2"></i>' + result.message;
+                form.reset();
+                const notice = document.getElementById('fileSelectionNotice');
+                if (notice) notice.style.display = 'none';
+            } else {
+                alertBox.className = 'alert alert-danger py-2 px-3 small rounded-3';
+                alertBox.innerHTML = '<i class="fa-solid fa-circle-exclamation me-2"></i>' + result.message;
+            }
+        } catch (error) {
+            alertBox.style.display = 'block';
+            alertBox.className = 'alert alert-danger py-2 px-3 small rounded-3';
+            alertBox.innerHTML = '<i class="fa-solid fa-triangle-exclamation me-2"></i>서버 통신 중 오류가 발생했습니다. 잠시 후 다시 시도해 주세요.';
+        } finally {
+            submitBtn.disabled = false;
+            submitBtn.innerHTML = originalBtnHtml;
+        }
+    }
+
+    if (window.self !== window.top) {
+        document.body.classList.add('in-modal-mode');
+        const csFooterWrap = document.getElementById('csFooterWrapper');
+        if (csFooterWrap) csFooterWrap.style.display = 'none';
+    }
+		
+    // [로더 100% 해제 안전장치]
+    if (window.AppLoader && typeof window.AppLoader.hide === 'function') window.AppLoader.hide();
+    if (window.parent && window.parent.AppLoader && typeof window.parent.AppLoader.hide === 'function') window.parent.AppLoader.hide();
+
+    if (window.self !== window.top) {
+        document.body.classList.add('in-modal-mode');
+        // service_intro.htm의 경우 푸터 래퍼 숨김 처리 유지
+        const footerWrap = document.getElementById('serviceFooterWrapper');
+        if (footerWrap) footerWrap.style.display = 'none';
+    }
+</script>
+</body>
+</html>

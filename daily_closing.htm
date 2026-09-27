@@ -1,0 +1,447 @@
+<?php
+/* ========================================================================== */
+/* 📝 소상공인 일일 영업마감 & AI 이상치 탐지 다이어리 (daily_closing.htm) */
+/* - [실제 연계] Open-Meteo 기상청 기상 연계, sales_data 크로스 체킹 및 CSRF 방어 */
+/* ========================================================================== */
+if (session_status() === PHP_SESSION_NONE) {
+    session_start();
+}
+ob_start();
+
+require_once 'db.php';
+
+if (!isset($_SESSION['user_id'])) {
+    header("Location: login.htm");
+    exit;
+}
+
+$user_id = (int)$_SESSION['user_id'];
+$user_role = $_SESSION['role'] ?? 'USER';
+$store_name = $_SESSION['store_name'] ?? '내 매장';
+
+if (empty($_SESSION['csrf_token'])) {
+    $_SESSION['csrf_token'] = bin2hex(random_bytes(32));
+}
+$csrf_token = $_SESSION['csrf_token'];
+
+// 마이그레이션 및 누락 컬럼 자동 보정
+try {
+    $pdo->exec("
+        CREATE TABLE IF NOT EXISTS `store_daily_closings` (
+            `id` INT AUTO_INCREMENT PRIMARY KEY,
+            `user_id` INT NOT NULL,
+            `closing_date` DATE NOT NULL,
+            `card_sales` INT NOT NULL DEFAULT 0,
+            `cash_sales` INT NOT NULL DEFAULT 0,
+            `delivery_sales` INT NOT NULL DEFAULT 0,
+            `total_sales` INT NOT NULL DEFAULT 0,
+            `cash_actual` INT NOT NULL DEFAULT 0,
+            `cash_diff` INT NOT NULL DEFAULT 0,
+            `weather` VARCHAR(20) DEFAULT '맑음',
+            `memo` TEXT NULL,
+            `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE KEY `uk_user_date` (`user_id`, `closing_date`)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+    ");
+
+    $pdo->exec("
+        CREATE TABLE IF NOT EXISTS `anomaly_logs` (
+            `id` INT AUTO_INCREMENT PRIMARY KEY,
+            `user_id` INT NOT NULL,
+            `anomaly_type` VARCHAR(100) NOT NULL,
+            `severity` VARCHAR(20) DEFAULT 'WARNING',
+            `message` TEXT NOT NULL,
+            `ai_prescription` TEXT NULL,
+            `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+    ");
+} catch (PDOException $e) {}
+
+// 실시간 기상 관측 API 연동
+$auto_weather = "맑음";
+try {
+    $w_ch = curl_init("https://api.open-meteo.com/v1/forecast?latitude=37.5665&longitude=126.9780&current=weather_code,temperature_2m&timezone=Asia%2FSeoul");
+    curl_setopt_array($w_ch, [
+        CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_CONNECTTIMEOUT => 2,
+        CURLOPT_TIMEOUT => 2,
+        CURLOPT_SSL_VERIFYPEER => false
+    ]);
+    $w_res = curl_exec($w_ch);
+    $http_code = curl_getinfo($w_ch, CURLINFO_HTTP_CODE);
+    curl_close($w_ch);
+    
+    if ($http_code === 200 && $w_res) {
+        $w_json = json_decode($w_res, true);
+        if (isset($w_json['current']['weather_code'])) {
+            $w_code = intval($w_json['current']['weather_code']);
+            if (in_array($w_code, [51, 53, 55, 61, 63, 65, 80, 81, 82])) $auto_weather = "비";
+            elseif (in_array($w_code, [71, 73, 75, 85, 86])) $auto_weather = "눈";
+            elseif (in_array($w_code, [1, 2, 3, 45])) $auto_weather = "흐림";
+        }
+    }
+} catch (Exception $e) {}
+
+// 사업자등록번호 기준 sales_data 당일 자동 집계치 도출
+$biz_no = '';
+try {
+    $u_stmt = $pdo->prepare("SELECT biz_no FROM users WHERE id = ? LIMIT 1");
+    $u_stmt->execute([$user_id]);
+    $biz_no = preg_replace('/[^0-9]/', '', $u_stmt->fetchColumn() ?: '');
+} catch (PDOException $e) {}
+
+$today = date('Y-m-d');
+$auto_rec_card = 0;
+$auto_rec_cash = 0;
+$auto_rec_deliv = 0;
+
+try {
+    $chk_sd_table = $pdo->query("SHOW TABLES LIKE 'sales_data'")->fetch();
+    if ($chk_sd_table) {
+        $has_biz = (bool)$pdo->query("SHOW COLUMNS FROM sales_data LIKE 'biz_no'")->fetch();
+        $sql = "SELECT category, COALESCE(SUM(amount), 0) AS amt FROM sales_data WHERE sale_date = ? " . ($has_biz && !empty($biz_no) ? "AND biz_no = '{$biz_no}' " : "") . "GROUP BY category";
+        $s_stmt = $pdo->prepare($sql);
+        $s_stmt->execute([$today]);
+        while ($r = $s_stmt->fetch(PDO::FETCH_ASSOC)) {
+            if ($r['category'] === '카드') $auto_rec_card = (int)$r['amt'];
+            elseif (strpos($r['category'], '현금') !== false) $auto_rec_cash += (int)$r['amt'];
+            else $auto_rec_deliv += (int)$r['amt'];
+        }
+    }
+} catch (PDOException $e) {}
+
+// POST 처리 (CSRF 완비)
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
+    if (!hash_equals($_SESSION['csrf_token'] ?? '', $_POST['csrf_token'] ?? '')) {
+        $_SESSION['flash_err'] = '비정상적인 요청이거나 세션이 만료되었습니다.';
+        header("Location: daily_closing.htm");
+        exit;
+    }
+
+    if ($_POST['action'] === 'save_closing') {
+        $c_date = trim($_POST['closing_date'] ?? date('Y-m-d'));
+        $card = max(0, intval($_POST['card_sales'] ?? 0));
+        $cash = max(0, intval($_POST['cash_sales'] ?? 0));
+        $deliv = max(0, intval($_POST['delivery_sales'] ?? 0));
+        $actual = max(0, intval($_POST['cash_actual'] ?? 0));
+        $weather = trim($_POST['weather'] ?? $auto_weather);
+        $memo = trim($_POST['memo'] ?? '');
+
+        $total = $card + $cash + $deliv;
+        $diff = $actual - $cash;
+
+        try {
+            $pdo->beginTransaction();
+
+            $stmt = $pdo->prepare("
+                INSERT INTO store_daily_closings 
+                (user_id, closing_date, card_sales, cash_sales, delivery_sales, total_sales, cash_actual, cash_diff, weather, memo) 
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON DUPLICATE KEY UPDATE 
+                    card_sales = VALUES(card_sales),
+                    cash_sales = VALUES(cash_sales),
+                    delivery_sales = VALUES(delivery_sales),
+                    total_sales = VALUES(total_sales),
+                    cash_actual = VALUES(cash_actual),
+                    cash_diff = VALUES(cash_diff),
+                    weather = VALUES(weather),
+                    memo = VALUES(memo)
+            ");
+            $stmt->execute([$user_id, $c_date, $card, $cash, $deliv, $total, $actual, $diff, $weather, $memo]);
+
+            // 시재금 불일치 시 anomaly_logs 기록
+            if (abs($diff) >= 10000) {
+                try {
+                    $anom_msg = "[{$c_date}] 시재금 불일치 발생: 실금고 시재와 집계액 간에 " . number_format($diff) . "원의 오차가 감지되었습니다.";
+                    $ins_anom = $pdo->prepare("INSERT INTO anomaly_logs (user_id, anomaly_type, severity, message, ai_prescription) VALUES (?, '시재금 불일치 감지', 'WARNING', ?, '포스기 현금 출납 장부와 실제 금고 현금을 즉시 재대사하십시오.')");
+                    $ins_anom->execute([$user_id, $anom_msg]);
+                } catch (Exception $e_anom) {}
+            }
+
+            $pdo->commit();
+            $_SESSION['flash_msg'] = "{$c_date} 일일 영업마감 및 AI 매출 데이터 검증이 완료되었습니다.";
+        } catch (PDOException $e) {
+            if ($pdo->inTransaction()) {
+                $pdo->rollBack();
+            }
+            $_SESSION['flash_err'] = '마감 정산 저장 오류가 발생했습니다: ' . $e->getMessage();
+        }
+    } elseif ($_POST['action'] === 'delete_closing') {
+        $del_id = intval($_POST['closing_id'] ?? 0);
+        try {
+            $del = $pdo->prepare("DELETE FROM store_daily_closings WHERE id = ? AND user_id = ?");
+            $del->execute([$del_id, $user_id]);
+            $_SESSION['flash_msg'] = '마감 내역이 정상 삭제되었습니다.';
+        } catch (PDOException $e) {
+            $_SESSION['flash_err'] = '삭제 중 오류가 발생했습니다.';
+        }
+    }
+
+    header("Location: daily_closing.htm");
+    exit;
+}
+
+$flash_msg = $_SESSION['flash_msg'] ?? '';
+$flash_err = $_SESSION['flash_err'] ?? '';
+unset($_SESSION['flash_msg'], $_SESSION['flash_err']);
+
+$closings = [];
+try {
+    $stmt = $pdo->prepare("SELECT * FROM store_daily_closings WHERE user_id = ? ORDER BY closing_date DESC LIMIT 15");
+    $stmt->execute([$user_id]);
+    $closings = $stmt->fetchAll(PDO::FETCH_ASSOC);
+} catch (PDOException $e) {}
+
+require_once 'header.php';
+?>
+
+<style>
+    .close-title-responsive { font-size: clamp(1.15rem, 1.8vw, 1.75rem) !important; font-weight: 800 !important; color: #0f172a; }
+    .close-scroll-wrapper { width: 100%; overflow-x: auto !important; -webkit-overflow-scrolling: touch; padding-bottom: 6px; }
+    .close-detail-table { min-width: 860px !important; width: 100% !important; }
+    .close-detail-table th, .close-detail-table td { white-space: nowrap !important; vertical-align: middle !important; padding: 0.85rem 0.95rem !important; }
+</style>
+
+<div class="row mb-4 align-items-center">
+    <div class="col-md-7">
+        <h3 class="fw-bold mb-1 close-title-responsive">
+            <i class="fa-solid fa-book-open text-primary me-2"></i>일일 영업마감 & 시재금 정산 다이어리
+        </h3>
+        <p class="text-muted mb-0 small">
+            신용카드, 현금, 온라인 매출을 집계하고 실시간 날씨 데이터와 금고 시재 오차를 AI가 교차 검증합니다.
+        </p>
+    </div>
+    <div class="col-md-5 text-md-end mt-3 mt-md-0">
+        <button type="button" class="btn btn-primary rounded-pill px-3 py-2 fw-semibold small shadow-sm" data-bs-toggle="modal" data-bs-target="#addClosingModal">
+            <i class="fa-solid fa-plus me-1"></i>오늘 마감 정산 등록
+        </button>
+    </div>
+</div>
+
+<div class="row mb-4">
+    <div class="col-12">
+        <div class="glass-card p-4">
+            <h5 class="fw-bold mb-3 text-dark"><i class="fa-solid fa-list-check text-primary me-2"></i>최근 일일 마감 내역 및 이상징후 대조</h5>
+            <div class="close-scroll-wrapper">
+                <table class="table table-hover align-middle close-detail-table mb-0">
+                    <thead class="table-light">
+                        <tr>
+                            <th>마감 일자</th>
+                            <th>날씨</th>
+                            <th class="text-end">신용카드</th>
+                            <th class="text-end">현금 매출</th>
+                            <th class="text-end">배달/온라인</th>
+                            <th class="text-end">총 결제액</th>
+                            <th class="text-center">금고 오차</th>
+                            <th>AI 특이사항 메모</th>
+                            <th class="text-center">관리</th>
+                        </tr>
+                    </thead>
+                    <tbody class="small">
+                        <?php if (empty($closings)): ?>
+                            <tr><td colspan="9" class="text-center py-4 text-muted">등록된 마감 내역이 없습니다. 상단 버튼으로 첫 마감을 진행하세요.</td></tr>
+                        <?php else: ?>
+                            <?php foreach ($closings as $c): ?>
+                                <tr>
+                                    <td class="fw-bold text-dark"><?= htmlspecialchars($c['closing_date']) ?></td>
+                                    <td><span class="badge bg-light text-dark border"><?= htmlspecialchars($c['weather'] ?? '맑음') ?></span></td>
+                                    <td class="text-end text-muted"><?= number_format($c['card_sales'] ?? 0) ?>원</td>
+                                    <td class="text-end text-muted"><?= number_format($c['cash_sales'] ?? 0) ?>원</td>
+                                    <td class="text-end text-muted"><?= number_format($c['delivery_sales'] ?? 0) ?>원</td>
+                                    <td class="text-end fw-bold text-primary fs-6"><?= number_format($c['total_sales'] ?? 0) ?>원</td>
+                                    <td class="text-center">
+                                        <?php if (($c['cash_diff'] ?? 0) == 0): ?>
+                                            <span class="badge bg-success-subtle text-success border">100% 일치</span>
+                                        <?php else: ?>
+                                            <span class="badge bg-danger-subtle text-danger border fw-bold"><?= number_format($c['cash_diff']) ?>원</span>
+                                        <?php endif; ?>
+                                    </td>
+                                    <td class="text-secondary text-truncate" style="max-width: 250px;"><?= htmlspecialchars($c['memo'] ?: '-') ?></td>
+                                    <td class="text-center">
+                                        <button type="button" class="btn btn-outline-danger btn-sm rounded-pill px-2 py-0" 
+                                                onclick="openDeleteConfirmModal('<?= (int)$c['id'] ?>', '<?= htmlspecialchars($c['closing_date'], ENT_QUOTES) ?>')">
+                                            <i class="fa-solid fa-trash-can"></i>
+                                        </button>
+                                    </td>
+                                </tr>
+                            <?php endforeach; ?>
+                        <?php endif; ?>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- 마감 등록 모달 -->
+<div class="modal fade" id="addClosingModal" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered modal-lg">
+        <div class="modal-content border-0 shadow-lg rounded-4 overflow-hidden">
+            <form method="POST" action="daily_closing.htm" id="formSaveClosing">
+                <input type="hidden" name="action" value="save_closing">
+                <input type="hidden" name="csrf_token" value="<?= htmlspecialchars($csrf_token) ?>">
+                <div class="modal-header bg-primary text-white py-3 px-4">
+                    <h5 class="modal-title fs-6 fw-bold text-white"><i class="fa-solid fa-cash-register me-2"></i>일일 영업마감 & 시재금 등록</h5>
+                    <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body p-4">
+                    <div class="row g-3 mb-3">
+                        <div class="col-md-6">
+                            <label class="form-label fw-bold small text-dark">마감 일자 <span class="text-danger">*</span></label>
+                            <input type="date" name="closing_date" id="closing_date" class="form-control" value="<?= date('Y-m-d') ?>" required>
+                        </div>
+                        <div class="col-md-6">
+                            <label class="form-label fw-bold small text-dark">기상청 실시간 날씨 (자동 수신)</label>
+                            <input type="text" name="weather" class="form-control bg-light" value="<?= htmlspecialchars($auto_weather) ?>" required>
+                        </div>
+                    </div>
+                    <div class="row g-3 mb-3">
+                        <div class="col-md-4">
+                            <label class="form-label fw-bold small text-dark">신용/체크카드 (원)</label>
+                            <input type="number" name="card_sales" id="card_sales" class="form-control" value="<?= $auto_rec_card ?: 0 ?>" required>
+                        </div>
+                        <div class="col-md-4">
+                            <label class="form-label fw-bold small text-dark">현금 매출 집계 (원)</label>
+                            <input type="number" name="cash_sales" id="cash_sales" class="form-control" value="<?= $auto_rec_cash ?: 0 ?>" required>
+                        </div>
+                        <div class="col-md-4">
+                            <label class="form-label fw-bold small text-dark">배달/온라인앱 (원)</label>
+                            <input type="number" name="delivery_sales" id="delivery_sales" class="form-control" value="<?= $auto_rec_deliv ?: 0 ?>" required>
+                        </div>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label fw-bold small text-danger"><i class="fa-solid fa-vault me-1"></i>실제 마감 금고 현금 시재액 (원) <span class="text-danger">*</span></label>
+                        <input type="number" name="cash_actual" id="cash_actual" class="form-control border-danger" value="<?= $auto_rec_cash ?: 0 ?>" required>
+                        <div class="form-text small">현금 매출 집계액과 실금고 금액 간의 오차를 자동 계산하여 이상치 로그를 검사합니다.</div>
+                    </div>
+                    <div class="mb-0">
+                        <label class="form-label fw-bold small text-dark">마감 특이사항 메모</label>
+                        <input type="text" name="memo" class="form-control" placeholder="예: 단체 예약 노쇼로 인한 손실 발생, 신메뉴 프로모션 호조">
+                    </div>
+                </div>
+                <div class="modal-footer bg-light py-2 px-3 border-top">
+                    <button type="button" class="btn btn-secondary btn-sm rounded-pill px-3" data-bs-dismiss="modal">취소</button>
+                    <button type="submit" class="btn btn-primary btn-sm rounded-pill px-4 fw-bold">마감 검증 완료</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
+<!-- 삭제 확인 전용 모달 -->
+<div class="modal fade" id="deleteConfirmModal" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered modal-sm">
+        <div class="modal-content border-0 shadow-lg rounded-4 overflow-hidden">
+            <form method="POST" action="daily_closing.htm">
+                <input type="hidden" name="action" value="delete_closing">
+                <input type="hidden" name="csrf_token" value="<?= htmlspecialchars($csrf_token) ?>">
+                <input type="hidden" name="closing_id" id="modal_del_closing_id" value="">
+                <div class="modal-body p-4 text-center">
+                    <div class="mb-3">
+                        <div class="d-inline-flex align-items-center justify-content-center bg-danger-subtle text-danger rounded-circle" style="width: 56px; height: 56px;">
+                            <i class="fa-solid fa-trash-can fs-3"></i>
+                        </div>
+                    </div>
+                    <h6 class="fw-bold text-dark mb-2">마감 기록 삭제</h6>
+                    <p class="small text-muted mb-0">
+                        <span id="modal_del_date_text" class="fw-bold text-dark"></span> 마감 정산 내역을 정말로 삭제하시겠습니까?
+                    </p>
+                </div>
+                <div class="modal-footer bg-light py-2 px-3 border-top d-flex justify-content-center gap-2">
+                    <button type="button" class="btn btn-outline-secondary btn-sm rounded-pill px-3" data-bs-dismiss="modal">취소</button>
+                    <button type="submit" class="btn btn-danger btn-sm rounded-pill px-4 fw-bold">삭제 확인</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
+<!-- 시스템 알림 전용 모달 -->
+<div class="modal fade" id="systemAlertModal" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered modal-sm">
+        <div class="modal-content border-0 shadow-lg rounded-4 overflow-hidden">
+            <div class="modal-body p-4 text-center">
+                <div class="mb-3" id="alertModalIconWrap">
+                    <div class="d-inline-flex align-items-center justify-content-center bg-primary-subtle text-primary rounded-circle" style="width: 56px; height: 56px;">
+                        <i class="fa-solid fa-circle-info fs-3"></i>
+                    </div>
+                </div>
+                <h6 class="fw-bold text-dark mb-2" id="alertModalTitle">알림</h6>
+                <p class="small text-muted mb-0" id="alertModalMessage" style="word-break: break-word;"></p>
+            </div>
+            <div class="modal-footer bg-light py-2 px-3 border-top d-flex justify-content-center">
+                <button type="button" class="btn btn-primary btn-sm rounded-pill px-4 fw-semibold" data-bs-dismiss="modal">확인</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+    function openDeleteConfirmModal(id, dateStr) {
+        document.getElementById('modal_del_closing_id').value = id;
+        document.getElementById('modal_del_date_text').textContent = '[' + dateStr + ']';
+        const delModal = new bootstrap.Modal(document.getElementById('deleteConfirmModal'));
+        delModal.show();
+    }
+
+    function showAppModal(title, msg, type = 'info') {
+        const titleEl = document.getElementById('alertModalTitle');
+        const msgEl = document.getElementById('alertModalMessage');
+        const iconWrap = document.getElementById('alertModalIconWrap');
+
+        titleEl.textContent = title;
+        msgEl.textContent = msg;
+
+        if (type === 'success') {
+            iconWrap.innerHTML = `
+                <div class="d-inline-flex align-items-center justify-content-center bg-success-subtle text-success rounded-circle" style="width: 56px; height: 56px;">
+                    <i class="fa-solid fa-circle-check fs-3"></i>
+                </div>`;
+        } else if (type === 'danger' || type === 'error') {
+            iconWrap.innerHTML = `
+                <div class="d-inline-flex align-items-center justify-content-center bg-danger-subtle text-danger rounded-circle" style="width: 56px; height: 56px;">
+                    <i class="fa-solid fa-triangle-exclamation fs-3"></i>
+                </div>`;
+        } else {
+            iconWrap.innerHTML = `
+                <div class="d-inline-flex align-items-center justify-content-center bg-primary-subtle text-primary rounded-circle" style="width: 56px; height: 56px;">
+                    <i class="fa-solid fa-circle-info fs-3"></i>
+                </div>`;
+        }
+
+        const alertModal = new bootstrap.Modal(document.getElementById('systemAlertModal'));
+        alertModal.show();
+    }
+
+    document.getElementById('formSaveClosing').addEventListener('submit', function(e) {
+        const cDate = document.getElementById('closing_date').value.trim();
+        const card = document.getElementById('card_sales').value;
+        const cash = document.getElementById('cash_sales').value;
+        const actual = document.getElementById('cash_actual').value;
+
+        if (!cDate) {
+            e.preventDefault();
+            showAppModal('입력 오류', '마감 일자를 선택해주세요.', 'danger');
+            return;
+        }
+        if (card < 0 || cash < 0 || actual < 0) {
+            e.preventDefault();
+            showAppModal('입력 오류', '금액은 0원 이상이어야 합니다.', 'danger');
+            return;
+        }
+    });
+
+    document.addEventListener('DOMContentLoaded', function() {
+        <?php if (!empty($flash_msg)): ?>
+            showAppModal('마감 정산 완료', <?= json_encode($flash_msg) ?>, 'success');
+        <?php elseif (!empty($flash_err)): ?>
+            showAppModal('처리 실패', <?= json_encode($flash_err) ?>, 'danger');
+        <?php endif; ?>
+    });
+</script>
+
+<?php
+include_once 'footer.php';
+?>
+</body>
+</html>

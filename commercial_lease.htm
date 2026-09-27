@@ -1,0 +1,367 @@
+<?php
+/* ========================================================================== */
+/* 🏢 소상공인 상가임대차 권리금·환산보증금·원상복구 계산기 (commercial_lease.htm) [최종 완성본] */
+/* - 상가건물임대차보호법 환산보증금 기준 초과 여부 및 10년 갱신요구권 정밀 진단 */
+/* ========================================================================== */
+if (session_status() === PHP_SESSION_NONE) {
+    session_start();
+}
+ob_start();
+
+require_once 'db.php';
+
+if (!isset($_SESSION['user_id'])) {
+    header("Location: login.htm");
+    exit;
+}
+
+$user_id = (int)$_SESSION['user_id'];
+$user_role = $_SESSION['role'] ?? 'USER';
+$store_name = $_SESSION['store_name'] ?? '내 매장';
+
+if (empty($_SESSION['csrf_token'])) {
+    $_SESSION['csrf_token'] = bin2hex(random_bytes(32));
+}
+$csrf_token = $_SESSION['csrf_token'];
+
+try {
+    $pdo->exec("
+        CREATE TABLE IF NOT EXISTS `store_lease_evaluations` (
+            `id` INT AUTO_INCREMENT PRIMARY KEY,
+            `user_id` INT NOT NULL,
+            `store_type` VARCHAR(30) NOT NULL DEFAULT 'RETAIL',
+            `region` VARCHAR(20) NOT NULL DEFAULT 'SEOUL' COMMENT '지역 (SEOUL, METRO, PROVINCE)',
+            `deposit_amt` BIGINT NOT NULL DEFAULT 50000000 COMMENT '보증금',
+            `monthly_rent` BIGINT NOT NULL DEFAULT 2500000 COMMENT '월세',
+            `converted_deposit` BIGINT NOT NULL DEFAULT 300000000 COMMENT '환산보증금',
+            `contract_start_date` DATE NOT NULL,
+            `contract_end_date` DATE NOT NULL,
+            `store_area_pyeong` DECIMAL(5, 1) NOT NULL DEFAULT 20.0,
+            `annual_net_profit` BIGINT NOT NULL DEFAULT 35000000,
+            `facility_invest_amount` BIGINT NOT NULL DEFAULT 40000000,
+            `estimated_premium` BIGINT NOT NULL DEFAULT 0,
+            `restoration_cost_est` INT NOT NULL DEFAULT 0,
+            `ai_legal_tip` TEXT NULL,
+            `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            KEY `idx_user` (`user_id`)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+    ");
+
+    $chkCol = $pdo->query("SHOW COLUMNS FROM `store_lease_evaluations` LIKE 'deposit_amt'")->fetch();
+    if (!$chkCol) {
+        $pdo->exec("ALTER TABLE `store_lease_evaluations` 
+            ADD COLUMN `region` VARCHAR(20) NOT NULL DEFAULT 'SEOUL' AFTER `store_type`,
+            ADD COLUMN `deposit_amt` BIGINT NOT NULL DEFAULT 50000000 AFTER `region`,
+            ADD COLUMN `monthly_rent` BIGINT NOT NULL DEFAULT 2500000 AFTER `deposit_amt`,
+            ADD COLUMN `converted_deposit` BIGINT NOT NULL DEFAULT 300000000 AFTER `monthly_rent`");
+    }
+} catch (PDOException $e) {}
+
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
+    if (!hash_equals($_SESSION['csrf_token'] ?? '', $_POST['csrf_token'] ?? '')) {
+        $_SESSION['flash_err'] = '비정상적인 접근이거나 세션이 만료되었습니다.';
+        header("Location: commercial_lease.htm");
+        exit;
+    }
+
+    if ($user_role === 'USER') {
+        $_SESSION['flash_err'] = '일반회원(읽기 전용)은 임대차 진단 등록/삭제 권한이 없습니다.';
+        header("Location: commercial_lease.htm");
+        exit;
+    }
+
+    if ($_POST['action'] === 'save_lease_eval') {
+        $store_type = trim($_POST['store_type'] ?? 'RETAIL');
+        $region = trim($_POST['region'] ?? 'SEOUL');
+        $deposit = max(0, intval($_POST['deposit_amt'] ?? 0));
+        $rent = max(0, intval($_POST['monthly_rent'] ?? 0));
+        $converted_deposit = $deposit + ($rent * 100);
+
+        $start_date = trim($_POST['contract_start_date'] ?? date('Y-m-d', strtotime('-2 years')));
+        $end_date = trim($_POST['contract_end_date'] ?? date('Y-m-d', strtotime('+1 year')));
+        $pyeong = max(1.0, floatval($_POST['store_area_pyeong'] ?? 20.0));
+        $annual_profit = max(0, intval($_POST['annual_net_profit'] ?? 30000000));
+        $invest_amt = max(0, intval($_POST['facility_invest_amount'] ?? 40000000));
+
+        $restore_rates = [
+            'FOOD' => 200000, 'BEAUTY' => 170000, 'RETAIL' => 130000,
+            'SERVICE' => 140000, 'OFFICE' => 120000
+        ];
+        $restoration_cost = round($pyeong * ($restore_rates[$store_type] ?? 150000));
+
+        $contract_years = max(0, (strtotime($end_date) - strtotime($start_date)) / (86400 * 365));
+        $depreciation_years = ($store_type === 'FOOD' || $store_type === 'BEAUTY') ? 3.0 : 4.0;
+        $depreciation_rate = min(1.0, $contract_years / $depreciation_years);
+        $facility_premium = round($invest_amt * (1 - $depreciation_rate * 0.7));
+
+        $profit_multipliers = [
+            'FOOD' => 0.85, 'BEAUTY' => 0.90, 'RETAIL' => 0.80,
+            'SERVICE' => 0.85, 'OFFICE' => 0.75
+        ];
+        $business_premium = round($annual_profit * ($profit_multipliers[$store_type] ?? 0.85));
+        $total_premium = $facility_premium + $business_premium;
+
+        // 환산보증금 상한선 체크 (서울 9억, 과밀억제권역 6.9억 등)
+        $threshold = ($region === 'SEOUL') ? 900000000 : (($region === 'METRO') ? 690000000 : 540000000);
+        $is_over_limit = ($converted_deposit > $threshold);
+
+        $limit_text = $is_over_limit ? "환산보증금({$converted_deposit}원)이 기준({$threshold}원)을 초과하여 5% 인상률 상한은 적용되지 않으나, 10년 계약갱신요구권과 권리금 회수 기회는 완벽히 보장됩니다." : "환산보증금 기준 충족으로 5% 임대료 증액 상한 및 10년 갱신권이 모두 엄격히 적용됩니다.";
+
+        try {
+            $ins = $pdo->prepare("
+                INSERT INTO store_lease_evaluations 
+                (user_id, store_type, region, deposit_amt, monthly_rent, converted_deposit, contract_start_date, contract_end_date, store_area_pyeong, annual_net_profit, facility_invest_amount, estimated_premium, restoration_cost_est, ai_legal_tip) 
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ");
+            $ins->execute([$user_id, $store_type, $region, $deposit, $rent, $converted_deposit, $start_date, $end_date, $pyeong, $annual_profit, $invest_amt, $total_premium, $restoration_cost, $limit_text]);
+            $_SESSION['flash_msg'] = "상가임대차 권리금 감정 및 환산보증금 법률 진단이 완료되었습니다.";
+        } catch (PDOException $e) {
+            $_SESSION['flash_err'] = '진단 저장 중 오류가 발생했습니다.';
+        }
+    } elseif ($_POST['action'] === 'delete_eval') {
+        $del_id = intval($_POST['eval_id'] ?? 0);
+        try {
+            $del = $pdo->prepare("DELETE FROM store_lease_evaluations WHERE id = ? AND user_id = ?");
+            $del->execute([$del_id, $user_id]);
+            $_SESSION['flash_msg'] = '선택하신 평가 기록이 삭제되었습니다.';
+        } catch (PDOException $e) {
+            $_SESSION['flash_err'] = '삭제 처리 중 오류가 발생했습니다.';
+        }
+    }
+
+    header("Location: commercial_lease.htm");
+    exit;
+}
+
+$flash_msg = $_SESSION['flash_msg'] ?? '';
+$flash_err = $_SESSION['flash_err'] ?? '';
+unset($_SESSION['flash_msg'], $_SESSION['flash_err']);
+
+$evaluations = [];
+try {
+    $stmt = $pdo->prepare("SELECT * FROM store_lease_evaluations WHERE user_id = ? ORDER BY id DESC LIMIT 10");
+    $stmt->execute([$user_id]);
+    $evaluations = $stmt->fetchAll(PDO::FETCH_ASSOC);
+} catch (PDOException $e) {}
+
+require_once 'header.php';
+?>
+
+<style>
+    .lease-title-responsive { font-size: clamp(1.15rem, 1.8vw, 1.75rem) !important; font-weight: 800 !important; color: #0f172a; }
+    .lease-card { border-radius: 16px; border: 1px solid #e2e8f0; box-shadow: 0 4px 15px rgba(0, 0, 0, 0.04); background: #ffffff; }
+    .lease-scroll-wrapper { width: 100%; overflow-x: auto !important; -webkit-overflow-scrolling: touch; padding-bottom: 6px; }
+    .lease-detail-table { min-width: 900px !important; width: 100% !important; }
+    .lease-detail-table th, .lease-detail-table td { white-space: nowrap !important; vertical-align: middle !important; padding: 0.85rem 0.95rem !important; }
+    .lease-detail-table td.text-wrap-cell { white-space: normal !important; min-width: 260px; word-break: keep-all; line-height: 1.5; }
+</style>
+
+<div class="row mb-4 align-items-center">
+    <div class="col-md-7">
+        <h3 class="fw-bold mb-1 lease-title-responsive">
+            <i class="fa-solid fa-building text-primary me-2"></i>상가임대차 권리금 평가 & 환산보증금 진단기
+        </h3>
+        <p class="text-muted mb-0 small">
+            환산보증금 기준 초과 여부, 10년 갱신권 잔여 기한, 적정 권리금 평가액 및 퇴거 시 철거 비용을 정밀 진단합니다.
+        </p>
+    </div>
+    <div class="col-md-5 text-md-end mt-3 mt-md-0">
+        <?php if ($user_role !== 'USER'): ?>
+            <button type="button" class="btn btn-primary rounded-pill px-3 py-2 fw-semibold small shadow-sm" data-bs-toggle="modal" data-bs-target="#addLeaseModal">
+                <i class="fa-solid fa-calculator me-1"></i>권리금/환산보증금 신규 진단
+            </button>
+        <?php endif; ?>
+    </div>
+</div>
+
+<?php if ($flash_msg): ?>
+    <div class="alert alert-success alert-dismissible fade show rounded-3 mb-4 shadow-sm small" role="alert">
+        <i class="fa-solid fa-circle-check me-2 text-success"></i><?= htmlspecialchars($flash_msg) ?>
+        <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+    </div>
+<?php endif; ?>
+
+<div class="row g-3 mb-4">
+    <div class="col-md-4">
+        <div class="lease-card p-3 border-start border-4 border-primary h-100">
+            <div class="d-flex justify-content-between align-items-center mb-1">
+                <span class="text-muted small fw-bold">계약갱신요구권 보장 기한</span>
+                <i class="fa-solid fa-calendar-check text-primary fs-5"></i>
+            </div>
+            <div class="fs-4 fw-bold text-dark mb-1">최초 계약일로부터 10년</div>
+            <small class="text-secondary">환산보증금 초과 매장도 10년 갱신권 100% 보장</small>
+        </div>
+    </div>
+    <div class="col-md-4">
+        <div class="lease-card p-3 border-start border-4 border-success h-100">
+            <div class="d-flex justify-content-between align-items-center mb-1">
+                <span class="text-muted small fw-bold">권리금 회수 기회 보호</span>
+                <i class="fa-solid fa-shield-halved text-success fs-5"></i>
+            </div>
+            <div class="fs-4 fw-bold text-success mb-1">계약 만료 6개월 전 ~ 만료 시</div>
+            <small class="text-secondary">임대인 방해 시 손해배상 청구 소송 가능</small>
+        </div>
+    </div>
+    <div class="col-md-4">
+        <div class="lease-card p-3 border-start border-4 border-warning h-100">
+            <div class="d-flex justify-content-between align-items-center mb-1">
+                <span class="text-muted small fw-bold">원상복구 표준 철거 단가</span>
+                <i class="fa-solid fa-hammer text-warning fs-5"></i>
+            </div>
+            <div class="fs-4 fw-bold text-warning-emphasis mb-1">평당 12만 ~ 20만 원</div>
+            <small class="text-secondary">종전 임차인 시설 철거 의무 없음 (대법원 판례)</small>
+        </div>
+    </div>
+</div>
+
+<div class="row mb-4">
+    <div class="col-12">
+        <div class="glass-card p-4">
+            <h5 class="fw-bold mb-3 text-dark">
+                <i class="fa-solid fa-list-check text-primary me-2"></i>사업장 임대차 권리금 감정 및 환산보증금 대장
+            </h5>
+
+            <div class="lease-scroll-wrapper">
+                <table class="table table-hover align-middle lease-detail-table mb-0">
+                    <thead class="table-light">
+                        <tr>
+                            <th>계약 기간</th>
+                            <th class="text-center">업종/실평수</th>
+                            <th class="text-end">보증금/월세 (환산보증금)</th>
+                            <th class="text-end">AI 추정 권리금</th>
+                            <th class="text-end">예상 원상복구비</th>
+                            <th>상가법 진단 처방</th>
+                            <th class="text-center">관리</th>
+                        </tr>
+                    </thead>
+                    <tbody class="small">
+                        <?php if (empty($evaluations)): ?>
+                            <tr><td colspan="7" class="text-center py-4 text-muted">등록된 임대차 진단 내역이 없습니다.</td></tr>
+                        <?php else: ?>
+                            <?php foreach ($evaluations as $e): ?>
+                                <tr>
+                                    <td class="fw-bold text-dark">
+                                        <div><?= htmlspecialchars($e['contract_start_date']) ?></div>
+                                        <small class="text-primary">~ <?= htmlspecialchars($e['contract_end_date']) ?></small>
+                                    </td>
+                                    <td class="text-center">
+                                        <span class="badge bg-light text-dark border"><?= htmlspecialchars($e['store_type']) ?></span>
+                                        <div><small class="text-muted"><?= $e['store_area_pyeong'] ?>평</small></div>
+                                    </td>
+                                    <td class="text-end">
+                                        <div>보증금 <?= number_format($e['deposit_amt'] ?? 0) ?>원 / 월 <?= number_format($e['monthly_rent'] ?? 0) ?>원</div>
+                                        <small class="text-secondary fw-semibold">환산: <?= number_format($e['converted_deposit'] ?? 0) ?>원</small>
+                                    </td>
+                                    <td class="text-end fw-bold text-success fs-6">
+                                        <?= number_format($e['estimated_premium']) ?>원
+                                    </td>
+                                    <td class="text-end fw-semibold text-danger">
+                                        약 <?= number_format($e['restoration_cost_est']) ?>원
+                                    </td>
+                                    <td class="text-wrap-cell text-primary fw-semibold">
+                                        <?= htmlspecialchars($e['ai_legal_tip']) ?>
+                                    </td>
+                                    <td class="text-center">
+                                        <?php if ($user_role !== 'USER' && !empty($e['id'])): ?>
+                                            <form method="POST" action="commercial_lease.htm" class="d-inline" onsubmit="return confirm('이 진단 내역을 삭제하시겠습니까?');">
+                                                <input type="hidden" name="action" value="delete_eval">
+                                                <input type="hidden" name="csrf_token" value="<?= htmlspecialchars($csrf_token) ?>">
+                                                <input type="hidden" name="eval_id" value="<?= (int)$e['id'] ?>">
+                                                <button type="submit" class="btn btn-outline-danger btn-sm rounded-pill px-2 py-0"><i class="fa-solid fa-trash-can"></i></button>
+                                            </form>
+                                        <?php else: ?>
+                                            <span class="text-muted">-</span>
+                                        <?php endif; ?>
+                                    </td>
+                                </tr>
+                            <?php endforeach; ?>
+                        <?php endif; ?>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+</div>
+
+<?php if ($user_role !== 'USER'): ?>
+<div class="modal fade" id="addLeaseModal" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered modal-lg">
+        <div class="modal-content border-0 shadow-lg rounded-4 overflow-hidden">
+            <form method="POST" action="commercial_lease.htm">
+                <input type="hidden" name="action" value="save_lease_eval">
+                <input type="hidden" name="csrf_token" value="<?= htmlspecialchars($csrf_token) ?>">
+                <div class="modal-header bg-primary text-white py-3 px-4">
+                    <h5 class="modal-title fs-6 fw-bold text-white"><i class="fa-solid fa-building me-2"></i>상가임대차 권리금 & 환산보증금 정밀 진단</h5>
+                    <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body p-4">
+                    <div class="row">
+                        <div class="col-md-6 mb-3">
+                            <label class="form-label fw-bold small text-dark">사업장 업종</label>
+                            <select name="store_type" class="form-select">
+                                <option value="RETAIL">도소매/유통/잡화점 (평당 13만 원)</option>
+                                <option value="FOOD">요식/외식/카페 (평당 20만 원)</option>
+                                <option value="BEAUTY">미용/뷰티/헬스 (평당 17만 원)</option>
+                                <option value="SERVICE">생활서비스/세탁/공방 (평당 14만 원)</option>
+                                <option value="OFFICE">사무실/학원/교습소 (평당 12만 원)</option>
+                            </select>
+                        </div>
+                        <div class="col-md-6 mb-3">
+                            <label class="form-label fw-bold small text-dark">사업장 소재 지역</label>
+                            <select name="region" class="form-select">
+                                <option value="SEOUL">서울특별시 (환산보증금 기준 9억 원)</option>
+                                <option value="METRO">수도권 과밀억제권역/부산 (기준 6.9억 원)</option>
+                                <option value="PROVINCE">광역시/기타 지역 (기준 5.4억 원)</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div class="row">
+                        <div class="col-md-6 mb-3">
+                            <label class="form-label fw-bold small text-dark">임대 보증금 (원)</label>
+                            <input type="number" name="deposit_amt" class="form-control" value="50000000" required>
+                        </div>
+                        <div class="col-md-6 mb-3">
+                            <label class="form-label fw-bold small text-dark">월 임대료 (원/부기세 별도)</label>
+                            <input type="number" name="monthly_rent" class="form-control" value="2500000" required>
+                        </div>
+                    </div>
+                    <div class="row">
+                        <div class="col-md-6 mb-3">
+                            <label class="form-label fw-bold small text-dark">매장 실평수 (평)</label>
+                            <input type="number" step="0.1" name="store_area_pyeong" class="form-control" value="20" required>
+                        </div>
+                        <div class="col-md-6 mb-3">
+                            <label class="form-label fw-bold small text-dark">최초 계약일</label>
+                            <input type="date" name="contract_start_date" class="form-control" value="<?= date('Y-m-d', strtotime('-2 years')) ?>" required>
+                        </div>
+                    </div>
+                    <div class="row">
+                        <div class="col-md-6 mb-3">
+                            <label class="form-label fw-bold small text-dark">현재 계약 만료일</label>
+                            <input type="date" name="contract_end_date" class="form-control" value="<?= date('Y-m-d', strtotime('+1 year')) ?>" required>
+                        </div>
+                        <div class="col-md-6 mb-3">
+                            <label class="form-label fw-bold small text-dark">연간 순이익 (원)</label>
+                            <input type="number" name="annual_net_profit" class="form-control" value="35000000" required>
+                        </div>
+                    </div>
+                    <div class="mb-0">
+                        <label class="form-label fw-bold small text-dark">초기 시설/인테리어 투자비 (원)</label>
+                        <input type="number" name="facility_invest_amount" class="form-control" value="40000000" required>
+                    </div>
+                </div>
+                <div class="modal-footer bg-light py-2 px-3 border-top">
+                    <button type="button" class="btn btn-secondary btn-sm rounded-pill px-3" data-bs-dismiss="modal">취소</button>
+                    <button type="submit" class="btn btn-primary btn-sm rounded-pill px-4 fw-bold">정밀 진단 시작</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+<?php endif; ?>
+
+<?php
+include_once 'footer.php';
+?>
+</body>
+</html>

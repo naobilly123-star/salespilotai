@@ -1,0 +1,406 @@
+<?php
+/* ========================================================================== */
+/* 📅 정기 세무·노무·위생 법정 필수 일정 자동 알리미 (compliance_calendar.htm) */
+/* - [실제 연계] 공공데이터포털 한국천문연구원 특일정보 API 연동 및 공휴일 순연 자동화 */
+/* ========================================================================== */
+if (session_status() === PHP_SESSION_NONE) {
+    session_start();
+}
+ob_start();
+
+require_once 'db.php';
+
+if (!isset($_SESSION['user_id'])) {
+    header("Location: login.htm");
+    exit;
+}
+
+$user_id = (int)$_SESSION['user_id'];
+$user_role = $_SESSION['role'] ?? 'USER';
+$store_name = $_SESSION['store_name'] ?? '내 매장';
+
+if (empty($_SESSION['csrf_token'])) {
+    $_SESSION['csrf_token'] = bin2hex(random_bytes(32));
+}
+$csrf_token = $_SESSION['csrf_token'];
+
+try {
+    $pdo->exec("
+        CREATE TABLE IF NOT EXISTS `store_compliance_schedules` (
+            `id` INT AUTO_INCREMENT PRIMARY KEY,
+            `user_id` INT NOT NULL,
+            `event_code` VARCHAR(40) NOT NULL,
+            `title` VARCHAR(100) NOT NULL,
+            `due_date` DATE NOT NULL,
+            `category` ENUM('TAX', 'LABOR', 'HYGIENE', 'SAFETY') DEFAULT 'TAX',
+            `penalty_desc` VARCHAR(150) NULL,
+            `is_completed` TINYINT(1) DEFAULT 0,
+            `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            KEY `idx_user_due` (`user_id`, `due_date`)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+    ");
+} catch (PDOException $e) {}
+
+// 공공데이터포털 특일정보 API 키 로드
+$api_portal_key = '';
+try {
+    $set_stmt = $pdo->query("SELECT setting_value FROM site_settings WHERE setting_key IN ('api_public_portal_key', 'data_go_kr_api_key') LIMIT 1");
+    if ($set_stmt) {
+        $api_portal_key = trim($set_stmt->fetchColumn() ?: '');
+    }
+} catch (PDOException $e) {}
+
+if (empty($api_portal_key)) {
+    $api_portal_key = getenv('PUBLIC_PORTAL_KEY') ?: ($_ENV['PUBLIC_PORTAL_KEY'] ?? '');
+}
+
+/* [실제 연계] 공공데이터포털 한국천문연구원 특일 정보 수신 함수 */
+function getPublicHolidays($year, $apiKey) {
+    if (empty($apiKey)) return [];
+    $cache_file = sys_get_temp_dir() . "/holidays_{$year}.json";
+    if (file_exists($cache_file) && (time() - filemtime($cache_file) < 86400 * 7)) {
+        return json_decode(file_get_contents($cache_file), true) ?: [];
+    }
+
+    $holidays = [];
+    $url = "https://apis.data.go.kr/B090041/openapi/service/SpcdeInfoService/getRestDeInfo?serviceKey=" . urlencode($apiKey) . "&solYear={$year}&numOfRows=50&_type=json";
+    $ch = curl_init();
+    curl_setopt_array($ch, [
+        CURLOPT_URL => $url,
+        CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_CONNECTTIMEOUT => 2,
+        CURLOPT_TIMEOUT => 3,
+        CURLOPT_SSL_VERIFYPEER => false
+    ]);
+    $res = curl_exec($ch);
+    $http_code = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+    curl_close($ch);
+
+    if ($http_code === 200 && $res) {
+        $data = json_decode($res, true);
+        $items = $data['response']['body']['items']['item'] ?? [];
+        if (isset($items['locdate'])) $items = [$items];
+        foreach ($items as $it) {
+            if (($it['isHoliday'] ?? '') === 'Y') {
+                $d = (string)$it['locdate'];
+                $holidays[] = substr($d, 0, 4) . '-' . substr($d, 4, 2) . '-' . substr($d, 6, 2);
+            }
+        }
+        if (!empty($holidays)) {
+            @file_put_contents($cache_file, json_encode($holidays));
+        }
+    }
+    return $holidays;
+}
+
+// 세법상 공휴일/주말 순연 계산 함수
+function getAdjustedDueDate($dateStr, $holidays) {
+    $d = new DateTime($dateStr);
+    while (true) {
+        $w = (int)$d->format('w'); // 0(일), 6(토)
+        $curr = $d->format('Y-m-d');
+        if ($w === 0 || $w === 6 || in_array($curr, $holidays)) {
+            $d->modify('+1 day');
+        } else {
+            break;
+        }
+    }
+    return $d->format('Y-m-d');
+}
+
+$cur_year = (int)date('Y');
+$holidays = getPublicHolidays($cur_year, $api_portal_key);
+$api_connected = !empty($holidays);
+
+// POST 처리 (CSRF 방어 완비)
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
+    if (!hash_equals($_SESSION['csrf_token'] ?? '', $_POST['csrf_token'] ?? '')) {
+        $_SESSION['flash_err'] = '비정상적인 요청이거나 세션이 만료되었습니다.';
+        header("Location: compliance_calendar.htm");
+        exit;
+    }
+
+    if ($user_role === 'USER') {
+        $_SESSION['flash_err'] = '일반회원(읽기 전용)은 상태 변경 권한이 없습니다.';
+        header("Location: compliance_calendar.htm");
+        exit;
+    }
+
+    if ($_POST['action'] === 'toggle_complete') {
+        $event_id = intval($_POST['event_id'] ?? 0);
+        $curr_status = intval($_POST['curr_status'] ?? 0);
+        $new_status = ($curr_status === 1) ? 0 : 1;
+        try {
+            $upd = $pdo->prepare("UPDATE store_compliance_schedules SET is_completed = ? WHERE id = ? AND user_id = ?");
+            $upd->execute([$new_status, $event_id, $user_id]);
+            $_SESSION['flash_msg'] = '의무 일정 이행 상태가 정상적으로 갱신되었습니다.';
+        } catch (PDOException $e) {
+            $_SESSION['flash_err'] = '상태 변경 중 오류가 발생했습니다.';
+        }
+    } elseif ($_POST['action'] === 'add_custom_event') {
+        $title = trim($_POST['title'] ?? '');
+        $due = trim($_POST['due_date'] ?? '');
+        $cat = in_array($_POST['category'] ?? '', ['TAX', 'LABOR', 'HYGIENE', 'SAFETY']) ? $_POST['category'] : 'TAX';
+        $penalty = trim($_POST['penalty_desc'] ?? '');
+
+        if (!empty($title) && !empty($due)) {
+            try {
+                $ins = $pdo->prepare("
+                    INSERT INTO store_compliance_schedules 
+                    (user_id, event_code, title, due_date, category, penalty_desc, is_completed) 
+                    VALUES (?, 'CUSTOM', ?, ?, ?, ?, 0)
+                ");
+                $ins->execute([$user_id, $title, $due, $cat, $penalty]);
+                $_SESSION['flash_msg'] = "새로운 법정 일정 '{$title}'이(가) 등록되었습니다.";
+            } catch (PDOException $e) {
+                $_SESSION['flash_err'] = '일정 등록 중 오류가 발생했습니다.';
+            }
+        }
+    }
+
+    header("Location: compliance_calendar.htm");
+    exit;
+}
+
+$flash_msg = $_SESSION['flash_msg'] ?? '';
+$flash_err = $_SESSION['flash_err'] ?? '';
+unset($_SESSION['flash_msg'], $_SESSION['flash_err']);
+
+$today = date('Y-m-d');
+
+// 공휴일 순연이 적용된 법정 표준 의무 일정
+$raw_withhold = date('Y-m-10', strtotime('+1 month'));
+$auto_laws = [
+    [
+        'id' => 0, 'event_code' => 'WITHHOLD', 'title' => '직원 원천세 및 지방소득세 신고·납부',
+        'due_date' => getAdjustedDueDate($raw_withhold, $holidays), 'category' => 'TAX',
+        'penalty_desc' => '납부지연가산세 (1일당 0.022%) + 무신고가산세 최대 20%', 'is_completed' => 0
+    ],
+    [
+        'id' => 0, 'event_code' => 'VAT_REG', 'title' => '부가가치세 제2기 확정신고 및 납부',
+        'due_date' => getAdjustedDueDate(($cur_year + 1) . '-01-25', $holidays), 'category' => 'TAX',
+        'penalty_desc' => '매출누락 무신고가산세 20% 및 납부지연가산세', 'is_completed' => 0
+    ],
+    [
+        'id' => 0, 'event_code' => 'INCOME_TAX', 'title' => '종합소득세 정기 확정신고',
+        'due_date' => getAdjustedDueDate(($cur_year + 1) . '-05-31', $holidays), 'category' => 'TAX',
+        'penalty_desc' => '무신고가산세 20% + 납부지연가산세 적용', 'is_completed' => 0
+    ],
+    [
+        'id' => 0, 'event_code' => 'HEALTH_INSPECT', 'title' => '정기 소방 및 가스 안전설비 점검',
+        'due_date' => date('Y-m-d', strtotime('+45 days')), 'category' => 'SAFETY',
+        'penalty_desc' => '소방시설법 위반 시 최대 300만 원 이하 과태료', 'is_completed' => 0
+    ]
+];
+
+$my_schedules = [];
+try {
+    $stmt = $pdo->prepare("SELECT * FROM store_compliance_schedules WHERE user_id = ? ORDER BY due_date ASC");
+    $stmt->execute([$user_id]);
+    $my_schedules = $stmt->fetchAll(PDO::FETCH_ASSOC);
+} catch (PDOException $e) {}
+
+$events = !empty($my_schedules) ? $my_schedules : $auto_laws;
+
+require_once 'header.php';
+?>
+
+<style>
+    .comp-title-responsive { font-size: clamp(1.15rem, 1.8vw, 1.75rem) !important; font-weight: 800 !important; color: #0f172a; }
+    .comp-card { border-radius: 16px; border: 1px solid #e2e8f0; box-shadow: 0 4px 15px rgba(0, 0, 0, 0.04); background: #ffffff; }
+    .comp-scroll-wrapper { width: 100%; overflow-x: auto !important; -webkit-overflow-scrolling: touch; padding-bottom: 6px; }
+    .comp-detail-table { min-width: 860px !important; width: 100% !important; }
+    .comp-detail-table th, .comp-detail-table td { white-space: nowrap !important; vertical-align: middle !important; padding: 0.85rem 0.95rem !important; }
+    .comp-detail-table td.text-wrap-cell { white-space: normal !important; min-width: 250px; word-break: keep-all; line-height: 1.5; }
+</style>
+
+<div class="row mb-4 align-items-center">
+    <div class="col-md-7">
+        <h3 class="fw-bold mb-1 comp-title-responsive">
+            <i class="fa-solid fa-calendar-check text-primary me-2"></i>정기 세무·노무·위생 법정 필수 일정 알리미
+        </h3>
+        <p class="text-muted mb-0 small">
+            공공데이터 특일정보 API와 연동되어 공휴일 순연이 100% 자동 반영된 실시간 D-Day 캘린더입니다.
+        </p>
+    </div>
+    <div class="col-md-5 text-md-end mt-3 mt-md-0 d-flex justify-content-md-end gap-2 align-items-center">
+        <span class="badge bg-<?= $api_connected ? 'success' : 'primary-subtle text-primary border border-primary' ?> px-3 py-2 rounded-pill small">
+            <i class="fa-solid <?= $api_connected ? 'fa-circle-check' : 'fa-clock' ?> me-1"></i>
+            <?= $api_connected ? '공공데이터포털 공휴일 API 실시간 동기화' : '법정 세무 표준 모델 가동' ?>
+        </span>
+        <?php if ($user_role !== 'USER'): ?>
+            <button type="button" class="btn btn-primary rounded-pill px-3 py-2 fw-semibold small shadow-sm" data-bs-toggle="modal" data-bs-target="#addEventModal">
+                <i class="fa-solid fa-plus me-1"></i>맞춤 일정 추가
+            </button>
+        <?php endif; ?>
+    </div>
+</div>
+
+<?php if ($flash_msg): ?>
+    <div class="alert alert-success alert-dismissible fade show rounded-3 mb-4 shadow-sm small" role="alert">
+        <i class="fa-solid fa-circle-check me-2 text-success"></i><?= htmlspecialchars($flash_msg) ?>
+        <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+    </div>
+<?php endif; ?>
+
+<?php if ($flash_err): ?>
+    <div class="alert alert-danger alert-dismissible fade show rounded-3 mb-4 shadow-sm small" role="alert">
+        <i class="fa-solid fa-triangle-exclamation me-2 text-danger"></i><?= htmlspecialchars($flash_err) ?>
+        <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+    </div>
+<?php endif; ?>
+
+<div class="row g-3 mb-4">
+    <div class="col-md-4">
+        <div class="comp-card p-3 border-start border-4 border-danger h-100">
+            <div class="d-flex justify-content-between align-items-center mb-1">
+                <span class="text-muted small fw-bold">원천세 신고/납부 마감</span>
+                <i class="fa-solid fa-clock-rotate-left text-danger fs-5"></i>
+            </div>
+            <div class="fs-4 fw-bold text-danger mb-1">매월 10일 (공휴일 순연)</div>
+            <small class="text-secondary">인건비 지급 익월 10일까지 신고 (가산세 최대 20%)</small>
+        </div>
+    </div>
+    <div class="col-md-4">
+        <div class="comp-card p-3 border-start border-4 border-primary h-100">
+            <div class="d-flex justify-content-between align-items-center mb-1">
+                <span class="text-muted small fw-bold">부가가치세 확정신고</span>
+                <i class="fa-solid fa-receipt text-primary fs-5"></i>
+            </div>
+            <div class="fs-4 fw-bold text-primary mb-1">1월 25일 / 7월 25일</div>
+            <small class="text-secondary">일반과세자 연 2회, 간이과세자 연 1회 확정 신고</small>
+        </div>
+    </div>
+    <div class="col-md-4">
+        <div class="comp-card p-3 border-start border-4 border-warning h-100">
+            <div class="d-flex justify-content-between align-items-center mb-1">
+                <span class="text-muted small fw-bold">종합소득세 확정신고</span>
+                <i class="fa-solid fa-file-invoice-dollar text-warning fs-5"></i>
+            </div>
+            <div class="fs-4 fw-bold text-warning-emphasis mb-1">매년 5월 31일</div>
+            <small class="text-secondary">전년도 종합 사업소득 국세청 일괄 신고 납부</small>
+        </div>
+    </div>
+</div>
+
+<div class="row mb-4">
+    <div class="col-12">
+        <div class="glass-card p-4">
+            <h5 class="fw-bold mb-3 text-dark"><i class="fa-solid fa-list-check text-primary me-2"></i>법정 필수 세무·노무 일정 및 실시간 D-Day 현황</h5>
+            <div class="comp-scroll-wrapper">
+                <table class="table table-hover align-middle comp-detail-table mb-0">
+                    <thead class="table-light">
+                        <tr>
+                            <th style="width: 12%;">분류</th>
+                            <th style="width: 14%;" class="text-center">D-Day 잔여</th>
+                            <th style="width: 24%;">법정 의무 일정명</th>
+                            <th style="width: 14%;">최종 기한 (공휴일 순연)</th>
+                            <th style="width: 26%;">미이행 시 패널티/가산세</th>
+                            <th style="width: 10%;" class="text-center">이행 상태</th>
+                        </tr>
+                    </thead>
+                    <tbody class="small">
+                        <?php foreach ($events as $ev): ?>
+                            <?php
+                                $d_diff = intval((strtotime($ev['due_date']) - strtotime($today)) / 86400);
+                                $is_urgent = ($d_diff >= 0 && $d_diff <= 10);
+                                $is_past = ($d_diff < 0);
+                                $cat_text = ($ev['category'] === 'TAX') ? '세무/국세' : (($ev['category'] === 'LABOR') ? '노무/급여' : '위생/안전');
+                                $cat_badge = ($ev['category'] === 'TAX') ? 'primary' : (($ev['category'] === 'LABOR') ? 'info' : 'warning text-dark');
+                                $done = (int)($ev['is_completed'] ?? 0) === 1;
+                            ?>
+                            <tr class="<?= $done ? 'table-light opacity-75' : '' ?>">
+                                <td><span class="badge bg-<?= $cat_badge ?> px-2 py-1"><?= $cat_text ?></span></td>
+                                <td class="text-center">
+                                    <?php if ($done): ?>
+                                        <span class="badge bg-success-subtle text-success border border-success-subtle px-3 py-2 fw-bold">
+                                            <i class="fa-solid fa-check me-1"></i>완료
+                                        </span>
+                                    <?php elseif ($is_urgent): ?>
+                                        <span class="badge bg-danger px-3 py-2 fs-7 fw-bold">D-<?= $d_diff ?>일 (마감임박)</span>
+                                    <?php elseif ($is_past): ?>
+                                        <span class="badge bg-secondary px-2 py-1">기한경과</span>
+                                    <?php else: ?>
+                                        <span class="badge bg-light text-primary border border-primary-subtle px-3 py-2 fw-bold">D-<?= $d_diff ?>일</span>
+                                    <?php endif; ?>
+                                </td>
+                                <td class="fw-bold text-dark fs-6"><?= htmlspecialchars($ev['title']) ?></td>
+                                <td class="text-muted"><i class="fa-regular fa-calendar me-1"></i><?= htmlspecialchars($ev['due_date']) ?></td>
+                                <td class="text-wrap-cell text-danger fw-semibold">
+                                    <i class="fa-solid fa-triangle-exclamation me-1"></i><?= htmlspecialchars($ev['penalty_desc'] ?? '해당 법령 규정에 따름') ?>
+                                </td>
+                                <td class="text-center">
+                                    <?php if ($user_role !== 'USER' && !empty($ev['id'])): ?>
+                                        <form method="POST" action="compliance_calendar.htm" class="d-inline">
+                                            <input type="hidden" name="action" value="toggle_complete">
+                                            <input type="hidden" name="csrf_token" value="<?= htmlspecialchars($csrf_token) ?>">
+                                            <input type="hidden" name="event_id" value="<?= (int)$ev['id'] ?>">
+                                            <input type="hidden" name="curr_status" value="<?= $done ? 1 : 0 ?>">
+                                            <button type="submit" class="btn btn-sm rounded-pill px-3 <?= $done ? 'btn-outline-secondary' : 'btn-success' ?>">
+                                                <?= $done ? '취소' : '완료처리' ?>
+                                            </button>
+                                        </form>
+                                    <?php else: ?>
+                                        <span class="text-muted">-</span>
+                                    <?php endif; ?>
+                                </td>
+                            </tr>
+                        <?php endforeach; ?>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+</div>
+
+<?php if ($user_role !== 'USER'): ?>
+<div class="modal fade" id="addEventModal" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-content border-0 shadow-lg rounded-4 overflow-hidden">
+            <form method="POST" action="compliance_calendar.htm">
+                <input type="hidden" name="action" value="add_custom_event">
+                <input type="hidden" name="csrf_token" value="<?= htmlspecialchars($csrf_token) ?>">
+                <div class="modal-header bg-primary text-white py-3 px-4">
+                    <h5 class="modal-title fs-6 fw-bold text-white"><i class="fa-solid fa-calendar-plus me-2"></i>맞춤 법정 의무 일정 등록</h5>
+                    <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body p-4">
+                    <div class="mb-3">
+                        <label class="form-label fw-bold small text-dark">의무 일정명 <span class="text-danger">*</span></label>
+                        <input type="text" name="title" class="form-control" placeholder="예: 주방 소화기 점검 / 정기 위생검사" required>
+                    </div>
+                    <div class="row">
+                        <div class="col-md-6 mb-3">
+                            <label class="form-label fw-bold small text-dark">분류</label>
+                            <select name="category" class="form-select">
+                                <option value="TAX">세무/국세</option>
+                                <option value="LABOR">노무/급여</option>
+                                <option value="HYGIENE">위생/보건</option>
+                                <option value="SAFETY">소방/안전</option>
+                            </select>
+                        </div>
+                        <div class="col-md-6 mb-3">
+                            <label class="form-label fw-bold small text-dark">마감 일자 <span class="text-danger">*</span></label>
+                            <input type="date" name="due_date" class="form-control" value="<?= date('Y-m-d', strtotime('+30 days')) ?>" required>
+                        </div>
+                    </div>
+                    <div class="mb-0">
+                        <label class="form-label fw-bold small text-dark">미이행 시 패널티/가산세 메모</label>
+                        <input type="text" name="penalty_desc" class="form-control" placeholder="예: 미점검 시 과태료 200만 원">
+                    </div>
+                </div>
+                <div class="modal-footer bg-light py-2 px-3 border-top">
+                    <button type="button" class="btn btn-secondary btn-sm rounded-pill px-3" data-bs-dismiss="modal">취소</button>
+                    <button type="submit" class="btn btn-primary btn-sm rounded-pill px-4 fw-bold">일정 등록</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+<?php endif; ?>
+
+<?php
+include_once 'footer.php';
+?>
+</body>
+</html>

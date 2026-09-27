@@ -1,0 +1,1644 @@
+<?php
+/* ========================================================================== */
+/* 💬 [카카오톡 스타일 스마트 메신저 100% 최종 완결본 (chat.htm)] */
+/* - PC/반응형(모바일) 간 버튼 디자인, 색상, 레이아웃 완벽 일원화 */
+/* - 모바일 화면에서 버튼 텍스트 줄바꿈 현상 원천 차단 (nowrap & 규격 통일) */
+/* - 모바일에서도 상단 '대화목록 서랍' + '친구 요청' + '새 대화' 버튼 모두 조화롭게 제공 */
+/* - DB 플래그 논리 삭제, 커스텀 모달 알림, 24시간 메시지 정책 완벽 유지 */
+/* ========================================================================== */
+if (session_status() === PHP_SESSION_NONE) {
+    session_start();
+}
+ob_start();
+
+require_once 'db.php';
+
+if (!isset($_SESSION['user_id'])) {
+    header("Location: login.htm");
+    exit;
+}
+
+$user_id = (int)$_SESSION['user_id'];
+$user_role = $_SESSION['role'] ?? 'USER';
+$username = $_SESSION['username'] ?? '사용자';
+
+/* [대화방 논리 삭제 플래그 컬럼 보장] */
+try {
+    $pdo->exec("ALTER TABLE chat_rooms ADD COLUMN deleted_user_ids TEXT NULL DEFAULT NULL");
+} catch (\Throwable $th) {}
+
+// 1. 내 프로필 로드
+$my_profile = [
+    'nickname' => $username,
+    'avatar_path' => '',
+    'status_msg' => '오늘도 번창하세요!'
+];
+try {
+    $p_stmt = $pdo->prepare("SELECT nickname, avatar_path, status_msg FROM chat_user_profiles WHERE user_id = ? LIMIT 1");
+    $p_stmt->execute([$user_id]);
+    if ($row = $p_stmt->fetch(PDO::FETCH_ASSOC)) {
+        if (!empty($row['nickname'])) $my_profile['nickname'] = $row['nickname'];
+        if (!empty($row['avatar_path'])) $my_profile['avatar_path'] = $row['avatar_path'];
+        if (!empty($row['status_msg'])) $my_profile['status_msg'] = $row['status_msg'];
+    }
+} catch (\Throwable $th) {}
+
+// 2. 신규 1:1 대화방 개설 처리
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['action'] === 'start_chat') {
+    $target_user_id = (int)($_POST['target_user_id'] ?? 0);
+    if ($target_user_id > 0 && $target_user_id !== $user_id) {
+        $p1 = min($user_id, $target_user_id);
+        $p2 = max($user_id, $target_user_id);
+        try {
+            $chk = $pdo->prepare("SELECT id, deleted_user_ids FROM chat_rooms WHERE is_group = 0 AND user_one_id = ? AND user_two_id = ? LIMIT 1");
+            $chk->execute([$p1, $p2]);
+            $exist_room = $chk->fetch(PDO::FETCH_ASSOC);
+            if ($exist_room) {
+                $room_id = $exist_room['id'];
+                $pdo->prepare("UPDATE chat_room_members SET has_left = 0 WHERE room_id = ? AND user_id = ?")->execute([$room_id, $user_id]);
+                
+                $del_users = !empty($exist_room['deleted_user_ids']) ? explode(',', $exist_room['deleted_user_ids']) : [];
+                if (in_array((string)$user_id, $del_users)) {
+                    $del_users = array_diff($del_users, [(string)$user_id]);
+                    $new_del_str = implode(',', array_filter($del_users));
+                    $pdo->prepare("UPDATE chat_rooms SET deleted_user_ids = ? WHERE id = ?")->execute([$new_del_str, $room_id]);
+                }
+            } else {
+                $ins = $pdo->prepare("INSERT INTO chat_rooms (is_group, user_one_id, user_two_id) VALUES (0, ?, ?)");
+                $ins->execute([$p1, $p2]);
+                $room_id = $pdo->lastInsertId();
+
+                $pdo->prepare("INSERT INTO chat_room_members (room_id, user_id, member_role) VALUES (?, ?, 'HOST')")->execute([$room_id, $user_id]);
+                $pdo->prepare("INSERT INTO chat_room_members (room_id, user_id, member_role) VALUES (?, ?, 'MEMBER')")->execute([$room_id, $target_user_id]);
+            }
+            header("Location: chat.htm?room_id={$room_id}");
+            exit;
+        } catch (PDOException $e) {}
+    }
+    header("Location: chat.htm");
+    exit;
+}
+
+$active_room_id = (int)($_GET['room_id'] ?? 0);
+
+// 3. 내 친구 목록
+$friends = [];
+try {
+    $f_stmt = $pdo->prepare("
+        SELECT f.friend_id, u.username, u.role, p.nickname, p.avatar_path, p.status_msg
+        FROM chat_friends f
+        JOIN users u ON f.friend_id = u.id
+        LEFT JOIN chat_user_profiles p ON u.id = p.user_id
+        WHERE f.user_id = ? AND f.status = 'ACCEPTED'
+        ORDER BY COALESCE(p.nickname, u.username) ASC
+    ");
+    $f_stmt->execute([$user_id]);
+    $friends = $f_stmt->fetchAll(PDO::FETCH_ASSOC);
+} catch (PDOException $e) {}
+
+// 4. 친구 요청 목록
+$pending_requests = [];
+try {
+    $req_stmt = $pdo->prepare("
+        SELECT f.user_id AS requester_id, u.username, u.role, p.nickname, p.avatar_path, f.created_at
+        FROM chat_friends f
+        JOIN users u ON f.user_id = u.id
+        LEFT JOIN chat_user_profiles p ON u.id = p.user_id
+        WHERE f.friend_id = ? AND f.status = 'PENDING'
+        ORDER BY f.created_at DESC
+    ");
+    $req_stmt->execute([$user_id]);
+    $pending_requests = $req_stmt->fetchAll(PDO::FETCH_ASSOC);
+} catch (\Throwable $th) {}
+
+// 5. 참여 중인 대화방 목록
+$chat_rooms = [];
+try {
+    if ($user_role === 'ADMIN') {
+        $r_stmt = $pdo->prepare("
+            SELECT r.id as room_id, r.title, r.is_group, r.updated_at, r.deleted_user_ids,
+                   u1.username as u1_name, u2.username as u2_name,
+                   (SELECT message FROM chat_messages WHERE room_id = r.id ORDER BY id DESC LIMIT 1) as last_message,
+                   (SELECT is_deleted FROM chat_messages WHERE room_id = r.id ORDER BY id DESC LIMIT 1) as last_is_deleted,
+                   (SELECT attachment_type FROM chat_messages WHERE room_id = r.id ORDER BY id DESC LIMIT 1) as last_attachment_type,
+                   (SELECT created_at FROM chat_messages WHERE room_id = r.id ORDER BY id DESC LIMIT 1) as last_message_time,
+                   (SELECT COUNT(*) FROM chat_messages WHERE room_id = r.id AND sender_id != ? AND is_read = 0) as unread_count
+            FROM chat_rooms r
+            LEFT JOIN users u1 ON r.user_one_id = u1.id
+            LEFT JOIN users u2 ON r.user_two_id = u2.id
+            LEFT JOIN chat_room_members crm ON r.id = crm.room_id AND crm.user_id = ?
+            WHERE (crm.has_left = 0 OR crm.has_left IS NULL)
+            ORDER BY r.updated_at DESC
+        ");
+        $r_stmt->execute([$user_id, $user_id]);
+    } else {
+        $r_stmt = $pdo->prepare("
+            SELECT r.id as room_id, r.title, r.is_group, r.updated_at, r.deleted_user_ids,
+                   u1.username as u1_name, u2.username as u2_name,
+                   (SELECT message FROM chat_messages WHERE room_id = r.id ORDER BY id DESC LIMIT 1) as last_message,
+                   (SELECT is_deleted FROM chat_messages WHERE room_id = r.id ORDER BY id DESC LIMIT 1) as last_is_deleted,
+                   (SELECT attachment_type FROM chat_messages WHERE room_id = r.id ORDER BY id DESC LIMIT 1) as last_attachment_type,
+                   (SELECT created_at FROM chat_messages WHERE room_id = r.id ORDER BY id DESC LIMIT 1) as last_message_time,
+                   (SELECT COUNT(*) FROM chat_messages WHERE room_id = r.id AND sender_id != ? AND is_read = 0) as unread_count
+            FROM chat_rooms r
+            JOIN chat_room_members crm ON r.id = crm.room_id
+            LEFT JOIN users u1 ON r.user_one_id = u1.id
+            LEFT JOIN users u2 ON r.user_two_id = u2.id
+            WHERE crm.user_id = ? AND crm.has_left = 0
+            ORDER BY r.updated_at DESC
+        ");
+        $r_stmt->execute([$user_id, $user_id]);
+    }
+    $raw_rooms = $r_stmt->fetchAll(PDO::FETCH_ASSOC);
+
+    foreach ($raw_rooms as $rItem) {
+        if (!empty($rItem['deleted_user_ids'])) {
+            $del_list = explode(',', (string)$rItem['deleted_user_ids']);
+            if (in_array((string)$user_id, $del_list, true)) {
+                continue;
+            }
+        }
+        $chat_rooms[] = $rItem;
+    }
+} catch (PDOException $e) {}
+
+$is_mobile = preg_match('/(android|iphone|ipad|mobile)/i', $_SERVER['HTTP_USER_AGENT'] ?? '');
+if (!$is_mobile && $active_room_id === 0 && !empty($chat_rooms)) {
+    $active_room_id = (int)$chat_rooms[0]['room_id'];
+}
+
+// 전체 회원 목록
+$all_users = [];
+try {
+    $u_stmt = $pdo->prepare("
+        SELECT u.id, u.username, u.role, p.nickname 
+        FROM users u 
+        LEFT JOIN chat_user_profiles p ON u.id = p.user_id 
+        WHERE u.id != ? 
+        ORDER BY u.role DESC, u.username ASC
+    ");
+    $u_stmt->execute([$user_id]);
+    $all_users = $u_stmt->fetchAll(PDO::FETCH_ASSOC);
+} catch (PDOException $e) {}
+
+require_once 'header.php';
+?>
+
+<!-- ========================================================================== -->
+<!-- 🎨 [PC & 모바일 버튼 통일 및 카카오톡 스타일 통합 CSS] -->
+<!-- ========================================================================== -->
+<style>
+    :root {
+        --kakao-yellow: #fee500;
+        --kakao-yellow-hover: #fada0a;
+        --kakao-brown: #371d1e;
+        --kakao-bg: #bacee0;
+        --kakao-text: #191919;
+    }
+
+    /* [헤더 상단 버튼 통일 스타일 (PC & 모바일 100% 동일한 외형/폰트 유지)] */
+    .app-header-btn {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        white-space: nowrap !important;
+        font-weight: 600;
+        font-size: 0.85rem;
+        height: 36px;
+        padding: 0 1rem;
+        border-radius: 50rem !important;
+        transition: all 0.2s ease;
+        box-shadow: 0 2px 6px rgba(0, 0, 0, 0.04);
+        text-decoration: none !important;
+    }
+    .app-header-btn i { font-size: 0.85rem; }
+
+    /* 대화방 메인 레이아웃 */
+    .chat-layout {
+        height: 80vh;
+        min-height: 620px;
+        background: #ffffff;
+        border: 1px solid #dce3eb;
+        border-radius: 16px;
+        overflow: hidden;
+        box-shadow: 0 10px 30px rgba(0, 0, 0, 0.05);
+        display: flex;
+        position: relative;
+    }
+
+    /* 좌측 사이드바 (PC) */
+    .chat-sidebar {
+        width: 340px;
+        flex-shrink: 0;
+        border-right: 1px solid #eef2f6;
+        background: #ffffff;
+        display: flex;
+        flex-direction: column;
+        height: 100%;
+    }
+
+    /* 우측 채팅방 본문 */
+    .chat-body-wrapper {
+        flex: 1;
+        display: flex;
+        flex-direction: column;
+        height: 100%;
+        background: var(--kakao-bg);
+        min-width: 0;
+        position: relative;
+    }
+
+    /* 내 프로필 카드 */
+    .my-profile-widget {
+        padding: 0.9rem 1.1rem;
+        background: #f8fafc;
+        border-bottom: 1px solid #eef2f6;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+    }
+    .my-avatar-img {
+        width: 44px;
+        height: 44px;
+        border-radius: 16px;
+        object-fit: cover;
+        box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+    }
+    .my-avatar-placeholder {
+        width: 44px;
+        height: 44px;
+        border-radius: 16px;
+        background: #e2e8f0;
+        color: #64748b;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 1.25rem;
+    }
+
+    /* 탭 디자인 */
+    .sidebar-tabs {
+        display: flex;
+        background: #f1f5f9;
+        border-bottom: 1px solid #e2e8f0;
+    }
+    .sidebar-tab-btn {
+        flex: 1;
+        padding: 0.75rem 0.5rem;
+        border: none;
+        background: none;
+        font-size: 0.83rem;
+        font-weight: 700;
+        color: #64748b;
+        cursor: pointer;
+        position: relative;
+        transition: all 0.2s ease;
+    }
+    .sidebar-tab-btn.active {
+        color: #0f172a;
+        background: #ffffff;
+        border-bottom: 2px solid #0f172a;
+    }
+
+    /* 대화 목록 아이템 */
+    .chat-room-list, .chat-friend-list {
+        overflow-y: auto;
+        flex: 1;
+    }
+    .chat-room-item {
+        padding: 0.9rem 1.1rem;
+        border-bottom: 1px solid #f8fafc;
+        cursor: pointer;
+        transition: background 0.15s ease;
+        text-decoration: none !important;
+        display: block;
+        color: inherit;
+    }
+    .chat-room-item:hover { background: #f1f5f9; }
+    .chat-room-item.active { background: #e2e8f0; border-left: 4px solid var(--kakao-brown); }
+
+    /* 날짜 구분선 (카카오톡 알약 형태) */
+    .chat-date-divider {
+        display: block;
+        text-align: center;
+        margin: 1.2rem 0;
+        width: 100%;
+        clear: both;
+    }
+    .chat-date-pill {
+        display: inline-block;
+        background: rgba(0, 0, 0, 0.22);
+        color: #ffffff;
+        font-size: 0.72rem;
+        font-weight: 500;
+        padding: 0.25rem 0.9rem;
+        border-radius: 50px;
+    }
+
+    /* 메시지 영역 */
+    .chat-messages-box {
+        flex: 1;
+        overflow-y: auto;
+        padding: 1rem 1.1rem;
+        background: var(--kakao-bg);
+        display: block !important;
+    }
+    .chat-msg-row {
+        display: block !important;
+        width: 100% !important;
+        margin-bottom: 0.85rem !important;
+        clear: both !important;
+    }
+    .chat-msg-row.mine { text-align: right !important; }
+    .chat-msg-row.theirs { text-align: left !important; }
+
+    /* 상대방 프로필 & 말풍선 */
+    .chat-theirs-wrapper {
+        display: inline-flex;
+        align-items: flex-start;
+        gap: 0.55rem;
+        max-width: 82%;
+    }
+    .chat-avatar-thumb {
+        width: 38px;
+        height: 38px;
+        border-radius: 14px;
+        object-fit: cover;
+        box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+        flex-shrink: 0;
+    }
+    .chat-avatar-icon {
+        width: 38px;
+        height: 38px;
+        border-radius: 14px;
+        background: #ffffff;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        color: #94a3b8;
+        font-size: 1.1rem;
+        flex-shrink: 0;
+        box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+    }
+    .chat-sender-name {
+        font-size: 0.76rem;
+        color: #334155;
+        font-weight: 600;
+        margin-bottom: 4px;
+        text-align: left;
+    }
+
+    .chat-bubble-combo {
+        display: inline-flex;
+        align-items: flex-end;
+        position: relative;
+        max-width: 100%;
+        gap: 0.35rem;
+    }
+    .chat-msg-row.mine .chat-bubble-combo {
+        flex-direction: row-reverse;
+        max-width: 78%;
+    }
+
+    /* 카카오톡 말풍선 */
+    .chat-bubble {
+        display: inline-block !important;
+        width: auto !important;
+        max-width: 100% !important;
+        padding: 0.55rem 0.85rem !important;
+        border-radius: 15px !important;
+        font-size: 0.88rem !important;
+        line-height: 1.48 !important;
+        word-break: break-word !important;
+        white-space: pre-wrap !important;
+        text-align: left !important;
+        color: var(--kakao-text) !important;
+        position: relative;
+        cursor: pointer;
+        box-shadow: 0 1px 2px rgba(0,0,0,0.1) !important;
+    }
+    .chat-msg-row.mine .chat-bubble {
+        background: var(--kakao-yellow) !important;
+        border-top-right-radius: 2px !important;
+    }
+    .chat-msg-row.theirs .chat-bubble {
+        background: #ffffff !important;
+        border-top-left-radius: 2px !important;
+    }
+    .chat-bubble.is-deleted {
+        background: rgba(255, 255, 255, 0.65) !important;
+        color: #64748b !important;
+        font-style: italic;
+        border: 1px dashed rgba(0,0,0,0.15);
+        cursor: default;
+    }
+
+    /* 시간 표시 */
+    .chat-meta-time {
+        font-size: 0.66rem;
+        color: #4b5563;
+        white-space: nowrap;
+        margin-bottom: 1px;
+    }
+
+    /* 말풍선 메뉴 드롭다운 */
+    .msg-dropdown-menu {
+        display: none;
+        position: absolute;
+        bottom: 105%;
+        background: #ffffff;
+        border: 1px solid #e2e8f0;
+        border-radius: 12px;
+        box-shadow: 0 8px 20px rgba(0,0,0,0.15);
+        z-index: 100;
+        min-width: 105px;
+        padding: 4px;
+    }
+    .chat-msg-row.mine .msg-dropdown-menu { right: 0; }
+    .chat-msg-row.theirs .msg-dropdown-menu { left: 0; }
+    .msg-dropdown-menu.show { display: block; animation: dropUp 0.15s ease-out; }
+    @keyframes dropUp {
+        from { opacity: 0; transform: translateY(6px); }
+        to { opacity: 1; transform: translateY(0); }
+    }
+    .msg-dropdown-item {
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+        padding: 0.45rem 0.75rem;
+        font-size: 0.78rem;
+        font-weight: 600;
+        color: #334155;
+        background: none;
+        border: none;
+        width: 100%;
+        border-radius: 8px;
+        text-align: left;
+        cursor: pointer;
+    }
+    .msg-dropdown-item:hover { background-color: #f1f5f9; }
+    .msg-dropdown-item.text-danger:hover { background-color: #fee2e2; }
+
+    /* 하단 입력바 */
+    .chat-input-box {
+        padding: 0.65rem 0.9rem;
+        background: #ffffff;
+        border-top: 1px solid #e2e8f0;
+        flex-shrink: 0;
+    }
+    .chat-textarea {
+        resize: none;
+        max-height: 100px;
+        height: 38px;
+        line-height: 1.45;
+        padding: 0.45rem 0.85rem;
+        font-size: 0.9rem;
+        border-radius: 20px;
+        background: #f1f5f9;
+        border: 1px solid transparent;
+        transition: all 0.2s;
+    }
+    .chat-textarea:focus {
+        background: #ffffff;
+        border-color: #cbd5e1;
+        box-shadow: none;
+    }
+    .btn-kakao-send {
+        background: var(--kakao-yellow);
+        color: var(--kakao-text);
+        font-weight: 700;
+        border: none;
+        height: 38px;
+        border-radius: 19px;
+        padding: 0 1.15rem;
+        transition: opacity 0.2s;
+        white-space: nowrap;
+    }
+    .btn-kakao-send:hover { opacity: 0.9; }
+
+    /* 카카오 빈 화면 중앙 노란색 액션 버튼 통일 */
+    .btn-kakao-action {
+        background: var(--kakao-yellow);
+        color: var(--kakao-text);
+        font-weight: 700;
+        border: none;
+        border-radius: 50rem;
+        padding: 0.55rem 1.6rem;
+        box-shadow: 0 4px 12px rgba(254, 229, 0, 0.4);
+        transition: all 0.2s ease;
+    }
+    .btn-kakao-action:hover {
+        background: var(--kakao-yellow-hover);
+        color: #000000;
+        transform: translateY(-1px);
+    }
+
+    /* 이모티콘 팝업 */
+    #emoticonPickerBox {
+        display: none;
+        position: absolute;
+        bottom: 65px;
+        left: 15px;
+        width: 320px;
+        background: #ffffff;
+        border-radius: 16px;
+        box-shadow: 0 10px 25px rgba(0,0,0,0.18);
+        z-index: 99;
+        padding: 12px;
+        border: 1px solid #e2e8f0;
+    }
+    .emoticon-grid {
+        display: grid;
+        grid-template-columns: repeat(6, 1fr);
+        gap: 6px;
+        max-height: 180px;
+        overflow-y: auto;
+    }
+    .emoticon-item {
+        font-size: 1.35rem;
+        text-align: center;
+        cursor: pointer;
+        padding: 4px;
+        border-radius: 8px;
+    }
+    .emoticon-item:hover { background: #f1f5f9; }
+
+    /* [반응형/모바일 전용 최적화] */
+    @media (max-width: 768px) {
+        .chat-layout { height: calc(100dvh - 120px); border-radius: 12px; margin-bottom: 0.5rem; }
+        .chat-sidebar { display: none !important; }
+        .chat-body-wrapper { width: 100% !important; display: flex !important; }
+        .app-header-btn { font-size: 0.8rem; height: 34px; padding: 0 0.75rem; }
+        .chat-msg-row.mine .chat-bubble-combo { max-width: 86% !important; }
+        .chat-theirs-wrapper { max-width: 88% !important; }
+    }
+</style>
+
+<!-- ========================================================================== -->
+<!-- 📌 상단 통일 헤더 바 (PC & 모바일 완벽 일치 구조) -->
+<!-- ========================================================================== -->
+<div class="d-flex justify-content-between align-items-center mb-3 flex-nowrap">
+    <div class="d-flex align-items-center gap-2 text-truncate">
+        <!-- 모바일 전용 목록 서랍(Offcanvas) 토글 버튼 -->
+        <button type="button" class="btn btn-outline-secondary border-0 rounded-circle d-md-none p-0 flex-shrink-0" style="width:34px;height:34px;" data-bs-toggle="offcanvas" data-bs-target="#mobileSidebarOffcanvas" title="대화 및 친구 목록 열기">
+            <i class="fa-solid fa-bars fs-5 text-dark"></i>
+        </button>
+        <div>
+            <h4 class="fw-bold mb-0 text-dark d-flex align-items-center text-truncate" style="font-size: clamp(1.05rem, 1.8vw, 1.35rem);">
+                <i class="fa-solid fa-comment text-warning me-2" style="filter: drop-shadow(0 2px 4px rgba(254, 229, 0, 0.6));"></i>스마트 메신저
+            </h4>
+            <small class="text-muted d-none d-md-block" style="font-size: 0.78rem;">카카오톡형 실시간 대화 및 파일 전송 시스템</small>
+        </div>
+    </div>
+    
+    <!-- [PC와 모바일 모두 100% 동일하게 배치된 메인 액션 버튼 그룹] -->
+    <div class="d-flex align-items-center gap-2 flex-shrink-0">
+        <!-- 1. 친구 요청 버튼 (PC / 모바일 완전 동일 스타일) -->
+        <button type="button" class="btn btn-outline-primary app-header-btn" data-bs-toggle="modal" data-bs-target="#friendRequestModal">
+            <i class="fa-solid fa-user-plus me-1"></i><span>친구 요청</span>
+        </button>
+        <!-- 2. 새 대화 시작 버튼 (PC / 모바일 완전 동일 스타일) -->
+        <button type="button" class="btn btn-primary app-header-btn" data-bs-toggle="modal" data-bs-target="#newChatModal">
+            <i class="fa-solid fa-plus me-1"></i><span>새 대화</span>
+        </button>
+    </div>
+</div>
+
+<!-- ========================================================================== -->
+<!-- 💬 메신저 메인 레이아웃 -->
+<!-- ========================================================================== -->
+<div class="chat-layout">
+    
+    <!-- 1. 좌측 사이드바 (PC 모니터 화면) -->
+    <div class="chat-sidebar">
+        <!-- 프로필 박스 -->
+        <div class="my-profile-widget">
+            <div class="d-flex align-items-center gap-2 text-truncate">
+                <?php if (!empty($my_profile['avatar_path']) && file_exists(__DIR__ . '/' . $my_profile['avatar_path'])): ?>
+                    <img src="<?= htmlspecialchars($my_profile['avatar_path']) ?>" class="my-avatar-img" alt="내 아바타">
+                <?php else: ?>
+                    <div class="my-avatar-placeholder"><i class="fa-solid fa-user"></i></div>
+                <?php endif; ?>
+                <div class="text-truncate">
+                    <div class="fw-bold text-dark small text-truncate d-flex align-items-center gap-1">
+                        <?= htmlspecialchars($my_profile['nickname']) ?>
+                        <span class="badge bg-secondary-subtle text-secondary rounded-pill" style="font-size: 0.65rem;"><?= htmlspecialchars($user_role) ?></span>
+                    </div>
+                    <small class="text-muted text-truncate d-block" style="font-size: 0.72rem;"><?= htmlspecialchars($my_profile['status_msg']) ?></small>
+                </div>
+            </div>
+            <button type="button" class="btn btn-light btn-sm rounded-circle border shadow-sm p-0" style="width:32px;height:32px;" onclick="openProfileModal()" title="프로필 설정">
+                <i class="fa-solid fa-gear text-secondary" style="font-size: 0.85rem;"></i>
+            </button>
+        </div>
+
+        <!-- 탭 메뉴 -->
+        <div class="sidebar-tabs">
+            <button type="button" class="sidebar-tab-btn active" id="tabRoomsBtn" onclick="switchSidebarTab('rooms')">
+                대화 (<?= count($chat_rooms) ?>)
+            </button>
+            <button type="button" class="sidebar-tab-btn" id="tabFriendsBtn" onclick="switchSidebarTab('friends')">
+                친구 (<?= count($friends) ?>)
+            </button>
+            <button type="button" class="sidebar-tab-btn" id="tabPendingBtn" onclick="switchSidebarTab('pending')">
+                요청
+                <?php if (count($pending_requests) > 0): ?>
+                    <span class="badge bg-danger rounded-pill ms-1" style="font-size: 0.65rem;"><?= count($pending_requests) ?></span>
+                <?php endif; ?>
+            </button>
+        </div>
+
+        <!-- [탭 1] 대화방 목록 -->
+        <div class="chat-room-list" id="sidebarRoomsList">
+            <?php if (empty($chat_rooms)): ?>
+                <div class="p-4 text-center text-muted small">
+                    <i class="fa-regular fa-comments fs-3 mb-2 d-block opacity-50"></i>대화방이 없습니다.
+                </div>
+            <?php else: ?>
+                <?php foreach ($chat_rooms as $rm): ?>
+                    <?php
+                        $is_selected = ($active_room_id === (int)$rm['room_id']);
+                        $display_title = $rm['title'];
+                        if (empty($display_title)) {
+                            $display_title = ($rm['u1_name'] === $username) ? $rm['u2_name'] : $rm['u1_name'];
+                        }
+
+                        $preview_msg = $rm['last_message'];
+                        if (!empty($rm['last_is_deleted'])) {
+                            $preview_msg = '삭제된 메시지입니다.';
+                        } elseif (empty($preview_msg)) {
+                            if (($rm['last_attachment_type'] ?? '') === 'IMAGE') $preview_msg = '(사진)';
+                            elseif (($rm['last_attachment_type'] ?? '') === 'FILE') $preview_msg = '(파일)';
+                            else $preview_msg = '대화를 시작하세요.';
+                        }
+                    ?>
+                    <a href="chat.htm?room_id=<?= $rm['room_id'] ?>" id="sidebarRoomItem_<?= $rm['room_id'] ?>" class="chat-room-item <?= $is_selected ? 'active' : '' ?>">
+                        <div class="d-flex justify-content-between align-items-center mb-1">
+                            <span class="fw-bold text-dark small text-truncate" style="max-width: 175px;">
+                                <?= htmlspecialchars($display_title) ?>
+                            </span>
+                            <?php if ($rm['unread_count'] > 0): ?>
+                                <span class="badge bg-danger rounded-pill" id="unreadBadge_<?= $rm['room_id'] ?>"><?= $rm['unread_count'] ?></span>
+                            <?php endif; ?>
+                        </div>
+                        <div class="small text-muted text-truncate" id="previewMsg_<?= $rm['room_id'] ?>" style="max-width: 230px; font-size: 0.78rem;">
+                            <?= htmlspecialchars($preview_msg) ?>
+                        </div>
+                    </a>
+                <?php endforeach; ?>
+            <?php endif; ?>
+        </div>
+
+        <!-- [탭 2] 친구 목록 -->
+        <div class="chat-friend-list d-none" id="sidebarFriendsList">
+            <?php if (empty($friends)): ?>
+                <div class="p-4 text-center text-muted small">등록된 친구가 없습니다.</div>
+            <?php else: ?>
+                <?php foreach ($friends as $fr): ?>
+                    <div class="p-2 px-3 border-bottom d-flex justify-content-between align-items-center bg-white">
+                        <div class="d-flex align-items-center gap-2 text-truncate">
+                            <?php if (!empty($fr['avatar_path']) && file_exists(__DIR__ . '/' . $fr['avatar_path'])): ?>
+                                <img src="<?= htmlspecialchars($fr['avatar_path']) ?>" class="rounded-circle" style="width:34px;height:34px;object-fit:cover;">
+                            <?php else: ?>
+                                <div class="rounded-circle bg-light border d-flex align-items-center justify-content-center text-muted" style="width:34px;height:34px;"><i class="fa-solid fa-user"></i></div>
+                            <?php endif; ?>
+                            <div class="text-truncate">
+                                <strong class="text-dark small d-block text-truncate"><?= htmlspecialchars($fr['nickname'] ?: $fr['username']) ?></strong>
+                                <small class="text-muted d-block text-truncate" style="font-size: 0.7rem;"><?= htmlspecialchars($fr['status_msg'] ?: $fr['role']) ?></small>
+                            </div>
+                        </div>
+                        <div class="d-flex gap-1">
+                            <form method="POST" action="chat.htm" class="d-inline">
+                                <input type="hidden" name="action" value="start_chat">
+                                <input type="hidden" name="target_user_id" value="<?= $fr['friend_id'] ?>">
+                                <button type="submit" class="btn btn-outline-primary btn-sm rounded-pill px-2 py-0" title="대화하기"><i class="fa-solid fa-comment"></i></button>
+                            </form>
+                            <button type="button" class="btn btn-outline-danger btn-sm rounded-pill px-2 py-0" onclick="deleteFriend(<?= $fr['friend_id'] ?>)" title="친구 삭제"><i class="fa-solid fa-user-xmark"></i></button>
+                        </div>
+                    </div>
+                <?php endforeach; ?>
+            <?php endif; ?>
+        </div>
+
+        <!-- [탭 3] 받은 친구 요청 -->
+        <div class="chat-friend-list d-none" id="sidebarPendingList">
+            <?php if (empty($pending_requests)): ?>
+                <div class="p-4 text-center text-muted small">새로운 요청이 없습니다.</div>
+            <?php else: ?>
+                <?php foreach ($pending_requests as $pr): ?>
+                    <div class="p-3 border-bottom bg-white">
+                        <strong class="text-dark small d-block mb-1"><?= htmlspecialchars($pr['nickname'] ?: $pr['username']) ?></strong>
+                        <div class="d-flex gap-2 mt-2">
+                            <button type="button" class="btn btn-primary btn-sm rounded-pill flex-1 w-100 py-1" onclick="respondFriendRequest(<?= $pr['requester_id'] ?>, 'ACCEPT')">수락</button>
+                            <button type="button" class="btn btn-outline-secondary btn-sm rounded-pill flex-1 w-100 py-1" onclick="respondFriendRequest(<?= $pr['requester_id'] ?>, 'REJECT')">거절</button>
+                        </div>
+                    </div>
+                <?php endforeach; ?>
+            <?php endif; ?>
+        </div>
+    </div>
+
+    <!-- 2. 우측 메인 대화창 (채팅방 화면) -->
+    <div class="chat-body-wrapper">
+        <?php if ($active_room_id > 0): ?>
+            <!-- 상단 바 -->
+            <div class="p-2 px-3 border-bottom bg-white d-flex justify-content-between align-items-center flex-shrink-0 shadow-sm" style="z-index: 10;">
+                <div class="d-flex align-items-center">
+                    <button type="button" class="btn btn-light border btn-sm rounded-circle me-2 d-md-none" data-bs-toggle="offcanvas" data-bs-target="#mobileSidebarOffcanvas" title="대화 목록">
+                        <i class="fa-solid fa-bars text-secondary"></i>
+                    </button>
+                    <div>
+                        <strong class="text-dark fs-6" id="chatRoomTitle">대화방 연결 중...</strong>
+                        <span class="badge bg-warning-subtle text-dark border border-warning-subtle ms-1 d-none d-sm-inline-block" style="font-size: 0.65rem;">카카오톡 실시간</span>
+                    </div>
+                </div>
+                <div class="d-flex gap-1 align-items-center">
+                    <button type="button" class="btn btn-outline-danger btn-sm rounded-pill px-3 fw-semibold" onclick="confirmLeaveRoom()" title="채팅방 나가기">
+                        <i class="fa-solid fa-arrow-right-from-bracket me-1"></i>나가기
+                    </button>
+                </div>
+            </div>
+
+            <!-- 메시지 출력 영역 -->
+            <div class="chat-messages-box" id="chatMessagesContainer">
+                <div class="text-center py-5 text-muted small" id="chatInitLoader"><i class="fa-solid fa-spinner fa-spin me-1"></i>메시지를 동기화하는 중입니다...</div>
+            </div>
+
+            <!-- 파일 전송 대기 바 -->
+            <div id="filePendingBar" class="d-flex justify-content-between align-items-center p-2 px-3 bg-white border-top">
+                <div class="text-truncate me-2 text-primary small">
+                    <i class="fa-solid fa-paperclip me-1"></i>
+                    <span id="filePendingName" class="fw-semibold"></span>
+                    <span id="filePendingSize" class="text-muted ms-1" style="font-size:0.75rem;"></span>
+                </div>
+                <button type="button" class="btn-close" style="font-size: 0.65rem;" onclick="clearFileInput()"></button>
+            </div>
+
+            <!-- 이모티콘 팝업 -->
+            <div id="emoticonPickerBox">
+                <div class="d-flex justify-content-between align-items-center pb-2 mb-2 border-bottom">
+                    <span class="fw-bold small text-dark"><i class="fa-regular fa-face-smile text-warning me-1"></i>이모티콘</span>
+                    <button type="button" class="btn-close" style="font-size: 0.6rem;" onclick="toggleEmoticonPicker()"></button>
+                </div>
+                <div class="emoticon-grid" id="emoticonGrid"></div>
+            </div>
+
+            <!-- 하단 카카오톡형 입력 바 -->
+            <div class="chat-input-box">
+                <form id="chatSendForm" onsubmit="handleSendMessage(event)" class="d-flex align-items-end gap-2">
+                    <input type="file" id="chatFileInput" style="display: none;" onchange="handleFileSelected(event)">
+                    <button type="button" class="btn btn-light border rounded-circle flex-shrink-0" style="width:38px;height:38px;" onclick="triggerFileInput()" title="파일/사진 첨부">
+                        <i class="fa-solid fa-plus text-secondary"></i>
+                    </button>
+                    <button type="button" class="btn btn-light border rounded-circle flex-shrink-0" style="width:38px;height:38px;" onclick="toggleEmoticonPicker()" title="이모티콘">
+                        <i class="fa-regular fa-face-smile text-secondary"></i>
+                    </button>
+                    <textarea id="chatInputMessage" class="form-control chat-textarea" placeholder="메시지를 입력하세요 (Enter: 전송 / Shift+Enter: 줄바꿈)" rows="1" onkeydown="handleTextareaKeydown(event)"></textarea>
+                    <button type="submit" class="btn btn-kakao-send flex-shrink-0 shadow-sm" id="btnSend">전송</button>
+                </form>
+            </div>
+        <?php else: ?>
+            <!-- 방 미선택 시 뷰 (PC / 모바일 100% 동일 일치) -->
+            <div class="h-100 d-flex flex-column align-items-center justify-content-center text-muted p-4">
+                <div class="bg-white rounded-circle p-4 shadow-sm mb-3">
+                    <i class="fa-solid fa-comments text-warning fs-1"></i>
+                </div>
+                <h5 class="fw-bold text-dark">참여 중인 대화방이 없습니다</h5>
+                <p class="mb-3 text-center text-secondary small">상단의 <strong>'새 대화'</strong> 또는 <strong>'친구 요청'</strong>을 통해 새로운 대화를 시작해보세요.</p>
+                <button type="button" class="btn btn-kakao-action" data-bs-toggle="modal" data-bs-target="#newChatModal">
+                    새 대화 시작하기
+                </button>
+            </div>
+        <?php endif; ?>
+    </div>
+</div>
+
+<!-- ========================================================================== -->
+<!-- 📱 [반응형/모바일 전용] 대화 목록 서랍 (Offcanvas) -->
+<!-- ========================================================================== -->
+<div class="offcanvas offcanvas-start" tabindex="-1" id="mobileSidebarOffcanvas" style="width: 320px;">
+    <div class="offcanvas-header bg-light border-bottom py-2">
+        <h6 class="offcanvas-title fw-bold text-dark"><i class="fa-solid fa-comments text-warning me-1"></i>대화 및 친구</h6>
+        <button type="button" class="btn-close" data-bs-dismiss="offcanvas"></button>
+    </div>
+    <div class="offcanvas-body p-0 d-flex flex-column">
+        <div class="p-2 border-bottom bg-light">
+            <span class="small fw-bold text-secondary">참여 중인 대화방 (<?= count($chat_rooms) ?>)</span>
+        </div>
+        <div class="overflow-y-auto flex-1">
+            <?php if (empty($chat_rooms)): ?>
+                <div class="p-4 text-center text-muted small">대화방이 없습니다.</div>
+            <?php else: ?>
+                <?php foreach ($chat_rooms as $rm): ?>
+                    <?php
+                        $display_title = $rm['title'];
+                        if (empty($display_title)) {
+                            $display_title = ($rm['u1_name'] === $username) ? $rm['u2_name'] : $rm['u1_name'];
+                        }
+                    ?>
+                    <a href="chat.htm?room_id=<?= $rm['room_id'] ?>" class="chat-room-item d-block">
+                        <div class="d-flex justify-content-between align-items-center mb-1">
+                            <span class="fw-bold text-dark small text-truncate"><?= htmlspecialchars($display_title) ?></span>
+                            <?php if ($rm['unread_count'] > 0): ?>
+                                <span class="badge bg-danger rounded-pill"><?= $rm['unread_count'] ?></span>
+                            <?php endif; ?>
+                        </div>
+                        <div class="small text-muted text-truncate" style="font-size:0.75rem;">
+                            <?= htmlspecialchars($rm['last_message'] ?: '대화를 시작하세요.') ?>
+                        </div>
+                    </a>
+                <?php endforeach; ?>
+            <?php endif; ?>
+        </div>
+    </div>
+</div>
+
+<!-- ========================================================================== -->
+<!-- 📢 [ALERT 완전 대체] 카카오톡 스타일 커스텀 모달 알림창 -->
+<!-- ========================================================================== -->
+<div class="modal fade" id="customAlertModal" tabindex="-1" aria-hidden="true" style="z-index: 1060;">
+    <div class="modal-dialog modal-dialog-centered modal-sm">
+        <div class="modal-content border-0 shadow-lg rounded-4 overflow-hidden">
+            <div class="modal-header py-2 px-3 border-0 bg-light">
+                <span class="fw-bold small text-dark" id="customAlertTitle"><i class="fa-solid fa-circle-info text-primary me-1"></i>알림</span>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" style="font-size: 0.7rem;"></button>
+            </div>
+            <div class="modal-body p-3 text-center">
+                <div id="customAlertIcon" class="mb-2 fs-3 text-warning">
+                    <i class="fa-solid fa-circle-exclamation"></i>
+                </div>
+                <div id="customAlertMessage" class="small fw-semibold text-dark" style="white-space: pre-wrap; line-height: 1.5;"></div>
+            </div>
+            <div class="modal-footer p-2 border-0 bg-light justify-content-center">
+                <button type="button" class="btn btn-warning text-dark fw-bold btn-sm rounded-pill px-4" data-bs-dismiss="modal">확인</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- ========================================================================== -->
+<!-- ❓ [CONFIRM 완전 대체] 카카오톡 스타일 커스텀 확인/취소 모달창 -->
+<!-- ========================================================================== -->
+<div class="modal fade" id="customConfirmModal" tabindex="-1" aria-hidden="true" style="z-index: 1060;">
+    <div class="modal-dialog modal-dialog-centered modal-sm">
+        <div class="modal-content border-0 shadow-lg rounded-4 overflow-hidden">
+            <div class="modal-header py-2 px-3 border-0 bg-light">
+                <span class="fw-bold small text-dark"><i class="fa-solid fa-circle-question text-warning me-1"></i>확인</span>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" style="font-size: 0.7rem;"></button>
+            </div>
+            <div class="modal-body p-3 text-center">
+                <div class="mb-2 fs-3 text-danger">
+                    <i class="fa-solid fa-triangle-exclamation"></i>
+                </div>
+                <div id="customConfirmMessage" class="small fw-semibold text-dark" style="white-space: pre-wrap; line-height: 1.5;"></div>
+            </div>
+            <div class="modal-footer p-2 border-0 bg-light d-flex gap-2">
+                <button type="button" class="btn btn-secondary btn-sm rounded-pill flex-1" data-bs-dismiss="modal">취소</button>
+                <button type="button" class="btn btn-danger btn-sm rounded-pill flex-1 fw-bold" id="customConfirmOkBtn">확인</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- 프로필 설정 모달 -->
+<div class="modal fade" id="myProfileModal" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered modal-sm">
+        <div class="modal-content border-0 shadow-lg rounded-4 overflow-hidden">
+            <div class="modal-header bg-dark text-white py-2 px-3">
+                <h6 class="modal-title fw-bold fs-6"><i class="fa-solid fa-user-gear me-1"></i>내 프로필 설정</h6>
+                <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+            </div>
+            <form id="profileForm" onsubmit="handleSaveProfile(event)">
+                <div class="modal-body p-3 text-center">
+                    <div class="mb-3 position-relative d-inline-block">
+                        <img id="profilePreviewImg" src="<?= !empty($my_profile['avatar_path']) ? htmlspecialchars($my_profile['avatar_path']) : 'https://cdn-icons-png.flaticon.com/512/3135/3135715.png' ?>" class="rounded-circle border shadow-sm" style="width:72px;height:72px;object-fit:cover;">
+                        <button type="button" class="btn btn-primary btn-sm rounded-circle position-absolute bottom-0 end-0 p-0 shadow" style="width:24px;height:24px;" onclick="document.getElementById('avatarFileInput').click()">
+                            <i class="fa-solid fa-camera" style="font-size:0.65rem;"></i>
+                        </button>
+                        <input type="file" id="avatarFileInput" name="avatar_file" style="display:none;" accept="image/*" onchange="previewAvatar(event)">
+                    </div>
+                    <div class="text-start mb-2">
+                        <label class="form-label small fw-bold text-dark mb-1">프로필 닉네임</label>
+                        <input type="text" name="nickname" id="profileNickname" class="form-control form-control-sm" value="<?= htmlspecialchars($my_profile['nickname']) ?>" required>
+                    </div>
+                    <div class="text-start mb-2">
+                        <label class="form-label small fw-bold text-dark mb-1">상태 대화명 (소개글)</label>
+                        <input type="text" name="status_msg" id="profileStatusMsg" class="form-control form-control-sm" value="<?= htmlspecialchars($my_profile['status_msg']) ?>" placeholder="예: 오늘도 번창하세요!">
+                    </div>
+                </div>
+                <div class="modal-footer bg-light py-2 px-3">
+                    <button type="button" class="btn btn-secondary btn-sm rounded-pill" data-bs-dismiss="modal">취소</button>
+                    <button type="submit" class="btn btn-warning text-dark btn-sm rounded-pill px-3 fw-bold">저장하기</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
+<!-- 친구 요청 모달 -->
+<div class="modal fade" id="friendRequestModal" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered modal-sm">
+        <div class="modal-content border-0 shadow-lg rounded-4 overflow-hidden">
+            <div class="modal-header bg-primary text-white py-2 px-3">
+                <h6 class="modal-title fw-bold fs-6"><i class="fa-solid fa-user-plus me-1"></i>친구 요청</h6>
+                <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body p-3">
+                <label class="form-label small fw-bold text-dark mb-1">회원 선택</label>
+                <select id="selectFriendTarget" class="form-select form-select-sm mb-3">
+                    <?php foreach ($all_users as $au): ?>
+                        <option value="<?= $au['id'] ?>"><?= htmlspecialchars($au['nickname'] ?: $au['username']) ?> (<?= $au['role'] ?>)</option>
+                    <?php endforeach; ?>
+                </select>
+                <button type="button" class="btn btn-primary btn-sm w-100 rounded-pill fw-bold" onclick="sendFriendRequest()">요청 보내기</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- 새 대화 시작 모달 -->
+<div class="modal fade" id="newChatModal" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-content border-0 shadow-lg rounded-4 overflow-hidden">
+            <form method="POST" action="chat.htm">
+                <input type="hidden" name="action" value="start_chat">
+                <div class="modal-header bg-primary text-white py-3 px-4">
+                    <h5 class="modal-title fs-6 fw-bold"><i class="fa-solid fa-user-plus me-2"></i>새 대화 시작</h5>
+                    <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body p-4">
+                    <label class="form-label small fw-bold text-dark mb-1">대화 상대 선택</label>
+                    <select name="target_user_id" class="form-select" required>
+                        <option value="">-- 회원을 선택해 주세요 --</option>
+                        <?php foreach ($all_users as $cu): ?>
+                            <option value="<?= $cu['id'] ?>">
+                                [<?= htmlspecialchars($cu['role']) ?>] <?= htmlspecialchars($cu['nickname'] ?: $cu['username']) ?> (#<?= $cu['id'] ?>)
+                            </option>
+                        <?php endforeach; ?>
+                    </select>
+                </div>
+                <div class="modal-footer bg-light py-2 px-3">
+                    <button type="button" class="btn btn-secondary btn-sm rounded-pill px-3" data-bs-dismiss="modal">닫기</button>
+                    <button type="submit" class="btn btn-primary btn-sm rounded-pill px-4 fw-bold">대화방 입장</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
+<!-- 메시지 수정 모달 -->
+<div class="modal fade" id="editMessageModal" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered modal-sm">
+        <div class="modal-content border-0 shadow rounded-4 overflow-hidden">
+            <div class="modal-header bg-light py-2 px-3">
+                <h6 class="modal-title fw-bold fs-6"><i class="fa-solid fa-pen-to-square me-1"></i>메시지 수정</h6>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body p-3">
+                <input type="hidden" id="editMessageId" value="">
+                <textarea id="editMessageContent" class="form-control" rows="3" placeholder="수정할 내용을 입력하세요" required></textarea>
+                <div class="form-text text-muted" style="font-size: 0.72rem;">* 전송 후 24시간 이내 메시지만 수정할 수 있습니다.</div>
+            </div>
+            <div class="modal-footer bg-light py-2 px-3">
+                <button type="button" class="btn btn-secondary btn-sm rounded-pill" data-bs-dismiss="modal">취소</button>
+                <button type="button" class="btn btn-warning text-dark btn-sm rounded-pill px-3 fw-bold" onclick="submitEditMessage()">수정완료</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- 사진 확대 모달 -->
+<div class="modal fade" id="imagePreviewModal" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered modal-lg">
+        <div class="modal-content bg-transparent border-0">
+            <div class="modal-body p-0 text-center position-relative">
+                <button type="button" class="btn-close btn-close-white position-absolute top-0 end-0 m-3 shadow" data-bs-dismiss="modal"></button>
+                <img id="imagePreviewTarget" src="" class="img-fluid rounded-3 shadow-lg" style="max-height: 85vh;">
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- ========================================================================== -->
+<!-- ⚙️ JavaScript 엔진부 -->
+<!-- ========================================================================== -->
+<script>
+const activeRoomId = <?= (int)$active_room_id ?>;
+const currentUserId = <?= (int)$user_id ?>;
+let lastMessageId = 0;
+let pollingTimer = null;
+let lastRenderedDate = null;
+let currentOpenDropdown = null;
+
+function showCustomAlert(msg, type = 'info') {
+    const alertModalEl = document.getElementById('customAlertModal');
+    const msgEl = document.getElementById('customAlertMessage');
+    const iconEl = document.getElementById('customAlertIcon');
+    if (!alertModalEl || !msgEl) {
+        alert(msg);
+        return;
+    }
+
+    if (type === 'success') {
+        iconEl.innerHTML = '<i class="fa-solid fa-circle-check text-success"></i>';
+    } else if (type === 'error') {
+        iconEl.innerHTML = '<i class="fa-solid fa-circle-xmark text-danger"></i>';
+    } else {
+        iconEl.innerHTML = '<i class="fa-solid fa-circle-info text-warning"></i>';
+    }
+
+    msgEl.innerText = msg;
+    const modal = new bootstrap.Modal(alertModalEl);
+    modal.show();
+}
+
+function showCustomConfirm(msg, onConfirmCallback) {
+    const confirmModalEl = document.getElementById('customConfirmModal');
+    const msgEl = document.getElementById('customConfirmMessage');
+    const okBtn = document.getElementById('customConfirmOkBtn');
+    if (!confirmModalEl || !msgEl) {
+        if (confirm(msg)) onConfirmCallback();
+        return;
+    }
+
+    msgEl.innerText = msg;
+    const modal = new bootstrap.Modal(confirmModalEl);
+
+    const newOkBtn = okBtn.cloneNode(true);
+    okBtn.parentNode.replaceChild(newOkBtn, okBtn);
+
+    newOkBtn.addEventListener('click', function() {
+        modal.hide();
+        if (typeof onConfirmCallback === 'function') {
+            onConfirmCallback();
+        }
+    });
+
+    modal.show();
+}
+
+const emoticonsData = {
+    emoji: ['😀','😁','😂','🤣','😃','😄','😅','😆','😉','😊','😋','😎','😍','🥰','😘','🤩','🥳','🤗','🤔','🤫','🤭','😴','😭','😡','👍','👏','🙌','🙏','💪','✨','🎉','💖','☕','🍺','🍕','🔥']
+};
+
+function escapeHtml(text) {
+    if (!text) return '';
+    const div = document.createElement('div');
+    div.innerText = text;
+    return div.innerHTML;
+}
+
+function formatTimestamp(ts) {
+    if (!ts) return '';
+    const date = new Date(ts.replace(/-/g, '/'));
+    let hours = date.getHours();
+    const minutes = String(date.getMinutes()).padStart(2, '0');
+    const ampm = hours >= 12 ? '오후' : '오전';
+    hours = hours % 12;
+    hours = hours ? hours : 12;
+    return `${ampm} ${hours}:${minutes}`;
+}
+
+function formatChatDate(ts) {
+    if (!ts) return '';
+    const date = new Date(ts.replace(/-/g, '/'));
+    const days = ['일요일', '월요일', '화요일', '수요일', '목요일', '금요일', '토요일'];
+    return `${date.getFullYear()}년 ${date.getMonth() + 1}월 ${date.getDate()}일 ${days[date.getDay()]}`;
+}
+
+function getDateKey(ts) {
+    if (!ts) return '';
+    const d = new Date(ts.replace(/-/g, '/'));
+    return `${d.getFullYear()}-${d.getMonth() + 1}-${d.getDate()}`;
+}
+
+function scrollToBottom() {
+    const container = document.getElementById('chatMessagesContainer');
+    if (container) container.scrollTop = container.scrollHeight;
+}
+
+function updateSidebarRoomPreview(roomId, messageText) {
+    const item = document.getElementById(`sidebarRoomItem_${roomId}`);
+    const previewEl = document.getElementById(`previewMsg_${roomId}`);
+    if (previewEl) {
+        previewEl.innerText = messageText || '새 메시지';
+    }
+    if (item && item.parentElement) {
+        item.parentElement.prepend(item);
+    }
+}
+
+function switchSidebarTab(tab) {
+    document.querySelectorAll('.sidebar-tab-btn').forEach(b => b.classList.remove('active'));
+    document.getElementById('sidebarRoomsList').classList.add('d-none');
+    document.getElementById('sidebarFriendsList').classList.add('d-none');
+    document.getElementById('sidebarPendingList').classList.add('d-none');
+
+    if (tab === 'rooms') {
+        document.getElementById('sidebarRoomsList').classList.remove('d-none');
+        document.getElementById('tabRoomsBtn').classList.add('active');
+    } else if (tab === 'friends') {
+        document.getElementById('sidebarFriendsList').classList.remove('d-none');
+        document.getElementById('tabFriendsBtn').classList.add('active');
+    } else if (tab === 'pending') {
+        document.getElementById('sidebarPendingList').classList.remove('d-none');
+        document.getElementById('tabPendingBtn').classList.add('active');
+    }
+}
+
+function openProfileModal() {
+    const modal = new bootstrap.Modal(document.getElementById('myProfileModal'));
+    modal.show();
+}
+
+function previewAvatar(e) {
+    const file = e.target.files[0];
+    if (file) {
+        const reader = new FileReader();
+        reader.onload = function(evt) {
+            document.getElementById('profilePreviewImg').src = evt.target.result;
+        };
+        reader.readAsDataURL(file);
+    }
+}
+
+function handleSaveProfile(e) {
+    e.preventDefault();
+    const form = document.getElementById('profileForm');
+    const fd = new FormData(form);
+    fd.append('action', 'save_profile');
+
+    fetch('chat_api.php', { method: 'POST', body: fd })
+        .then(r => r.json())
+        .then(res => {
+            showCustomAlert(res.message, res.status);
+            if (res.status === 'success') {
+                setTimeout(() => location.reload(), 1200);
+            }
+        });
+}
+
+function sendFriendRequest() {
+    const targetId = document.getElementById('selectFriendTarget').value;
+    const fd = new FormData();
+    fd.append('action', 'send_friend_request');
+    fd.append('target_id', targetId);
+
+    fetch('chat_api.php', { method: 'POST', body: fd })
+        .then(r => r.json())
+        .then(res => {
+            showCustomAlert(res.message, res.status);
+            if (res.status === 'success') {
+                const modal = bootstrap.Modal.getInstance(document.getElementById('friendRequestModal'));
+                if (modal) modal.hide();
+            }
+        });
+}
+
+function respondFriendRequest(requesterId, decision) {
+    const fd = new FormData();
+    fd.append('action', 'respond_friend_request');
+    fd.append('requester_id', requesterId);
+    fd.append('decision', decision);
+
+    fetch('chat_api.php', { method: 'POST', body: fd })
+        .then(r => r.json())
+        .then(res => {
+            showCustomAlert(res.message, res.status);
+            if (res.status === 'success') setTimeout(() => location.reload(), 1000);
+        });
+}
+
+function deleteFriend(friendId) {
+    showCustomConfirm('친구를 목록에서 삭제하시겠습니까?', function() {
+        const fd = new FormData();
+        fd.append('action', 'delete_friend');
+        fd.append('friend_id', friendId);
+
+        fetch('chat_api.php', { method: 'POST', body: fd })
+            .then(r => r.json())
+            .then(res => {
+                showCustomAlert(res.message, res.status);
+                if (res.status === 'success') setTimeout(() => location.reload(), 1000);
+            });
+    });
+}
+
+function toggleEmoticonPicker() {
+    const box = document.getElementById('emoticonPickerBox');
+    if (box.style.display === 'block') {
+        box.style.display = 'none';
+    } else {
+        box.style.display = 'block';
+        renderEmoticons();
+    }
+}
+
+function renderEmoticons() {
+    const grid = document.getElementById('emoticonGrid');
+    grid.innerHTML = '';
+    emoticonsData.emoji.forEach(em => {
+        const span = document.createElement('span');
+        span.className = 'emoticon-item';
+        span.innerText = em;
+        span.onclick = function() {
+            document.getElementById('chatInputMessage').value += em;
+            document.getElementById('chatInputMessage').focus();
+            document.getElementById('emoticonPickerBox').style.display = 'none';
+        };
+        grid.appendChild(span);
+    });
+}
+
+function handleTextareaKeydown(e) {
+    if (e.key === 'Enter') {
+        if (!e.shiftKey) {
+            e.preventDefault();
+            handleSendMessage(e);
+        }
+    }
+}
+
+const chatTextarea = document.getElementById('chatInputMessage');
+if (chatTextarea) {
+    chatTextarea.addEventListener('input', function() {
+        this.style.height = '38px';
+        this.style.height = (this.scrollHeight) + 'px';
+    });
+}
+
+function triggerFileInput() {
+    document.getElementById('chatFileInput').click();
+}
+
+function handleFileSelected(e) {
+    const file = e.target.files[0];
+    if (!file) return;
+
+    document.getElementById('filePendingName').innerText = file.name;
+    document.getElementById('filePendingSize').innerText = `(${(file.size / 1024).toFixed(1)} KB)`;
+    document.getElementById('filePendingBar').style.display = 'flex';
+}
+
+function clearFileInput() {
+    const finput = document.getElementById('chatFileInput');
+    if (finput) finput.value = '';
+    const pendingBar = document.getElementById('filePendingBar');
+    if (pendingBar) pendingBar.style.display = 'none';
+}
+
+function previewImageModal(imgUrl) {
+    document.getElementById('imagePreviewTarget').src = imgUrl;
+    const modal = new bootstrap.Modal(document.getElementById('imagePreviewModal'));
+    modal.show();
+}
+
+function toggleMessageDropdown(e, msgId) {
+    e.stopPropagation();
+    const targetMenu = document.getElementById(`dropdownMenu_${msgId}`);
+    if (!targetMenu) return;
+
+    if (currentOpenDropdown && currentOpenDropdown !== targetMenu) {
+        currentOpenDropdown.classList.remove('show');
+    }
+
+    targetMenu.classList.toggle('show');
+    currentOpenDropdown = targetMenu.classList.contains('show') ? targetMenu : null;
+}
+
+document.addEventListener('click', function(e) {
+    if (currentOpenDropdown && !currentOpenDropdown.contains(e.target)) {
+        currentOpenDropdown.classList.remove('show');
+        currentOpenDropdown = null;
+    }
+});
+
+function openEditModal(msgId, currentText, createdAtStr) {
+    if (currentOpenDropdown) currentOpenDropdown.classList.remove('show');
+
+    if (createdAtStr) {
+        const createdMs = new Date(createdAtStr.replace(/-/g, '/')).getTime();
+        const nowMs = Date.now();
+        if ((nowMs - createdMs) > 86400000) {
+            showCustomAlert('작성 후 24시간이 지난 메시지는 수정할 수 없습니다.', 'error');
+            return;
+        }
+    }
+
+    document.getElementById('editMessageId').value = msgId;
+    document.getElementById('editMessageContent').value = currentText;
+    const modal = new bootstrap.Modal(document.getElementById('editMessageModal'));
+    modal.show();
+}
+
+function submitEditMessage() {
+    const msgId = document.getElementById('editMessageId').value;
+    const newContent = document.getElementById('editMessageContent').value.trim();
+    if (!newContent) return;
+
+    const fd = new FormData();
+    fd.append('action', 'edit_message');
+    fd.append('message_id', msgId);
+    fd.append('new_content', newContent);
+
+    fetch('chat_api.php', { method: 'POST', body: fd })
+        .then(r => r.json())
+        .then(res => {
+            if (res.status === 'success') {
+                const modalEl = document.getElementById('editMessageModal');
+                const modalInstance = bootstrap.Modal.getInstance(modalEl);
+                if (modalInstance) modalInstance.hide();
+                lastMessageId = 0;
+                lastRenderedDate = null;
+                fetchMessages();
+                updateSidebarRoomPreview(activeRoomId, newContent);
+            } else {
+                showCustomAlert(res.message || '수정할 수 없습니다.', 'error');
+            }
+        });
+}
+
+function deleteMessage(msgId, createdAtStr) {
+    if (currentOpenDropdown) currentOpenDropdown.classList.remove('show');
+
+    let isWithin24h = true;
+    if (createdAtStr) {
+        const createdMs = new Date(createdAtStr.replace(/-/g, '/')).getTime();
+        if ((Date.now() - createdMs) > 86400000) {
+            isWithin24h = false;
+        }
+    }
+
+    let confirmMsg = '이 메시지를 삭제하시겠습니까?';
+    if (isWithin24h) {
+        confirmMsg = '24시간 이내 메시지 삭제 시 모든 참여자에게 "삭제된 메시지입니다"로 표시됩니다.\n정말 삭제하시겠습니까?';
+    } else {
+        confirmMsg = '전송 후 24시간이 지난 메시지입니다.\n삭제 시 본인의 대화창에서만 삭제되고 상대방에게는 계속 표시됩니다.\n삭제하시겠습니까?';
+    }
+
+    showCustomConfirm(confirmMsg, function() {
+        const fd = new FormData();
+        fd.append('action', 'delete_message');
+        fd.append('message_id', msgId);
+
+        fetch('chat_api.php', { method: 'POST', body: fd })
+            .then(r => r.json())
+            .then(res => {
+                if (res.status === 'success') {
+                    if (res.mode === 'me_only') {
+                        const row = document.getElementById(`msgRow_${msgId}`);
+                        if (row) row.remove();
+                    } else {
+                        lastMessageId = 0;
+                        lastRenderedDate = null;
+                        fetchMessages();
+                        updateSidebarRoomPreview(activeRoomId, '삭제된 메시지입니다.');
+                    }
+                } else {
+                    showCustomAlert(res.message || '삭제에 실패했습니다.', 'error');
+                }
+            });
+    });
+}
+
+function confirmLeaveRoom() {
+    showCustomConfirm('정말 이 대화방을 나가시겠습니까?\n대화방이 목록에서 삭제(숨김) 처리됩니다.', function() {
+        const fd = new FormData();
+        fd.append('action', 'leave_room');
+        fd.append('room_id', activeRoomId);
+
+        fetch('chat_api.php', { method: 'POST', body: fd })
+            .then(r => r.json())
+            .then(res => {
+                const roomItem = document.getElementById(`sidebarRoomItem_${activeRoomId}`);
+                if (roomItem) roomItem.remove();
+                window.location.href = 'chat.htm';
+            })
+            .catch(() => { window.location.href = 'chat.htm'; });
+    });
+}
+
+/* ========================================================================== */
+/* 실시간 메시지 수신 엔진 */
+/* ========================================================================== */
+function fetchMessages() {
+    if (!activeRoomId || activeRoomId <= 0) {
+        const loader = document.getElementById('chatInitLoader');
+        if (loader) loader.innerHTML = '대화방을 선택해 주세요.';
+        return;
+    }
+
+    fetch(`chat_api.php?action=get_messages&room_id=${activeRoomId}&last_id=${lastMessageId}&_t=${Date.now()}`)
+        .then(r => r.json())
+        .then(res => {
+            const container = document.getElementById('chatMessagesContainer');
+            const initLoader = document.getElementById('chatInitLoader');
+            
+            if (res.status === 'success') {
+                if (lastMessageId === 0) {
+                    container.innerHTML = '';
+                    lastRenderedDate = null;
+                    if (res.room_info && document.getElementById('chatRoomTitle')) {
+                        document.getElementById('chatRoomTitle').innerText = res.room_info.title;
+                    }
+                }
+
+                if (res.updated_messages && res.updated_messages.length > 0) {
+                    res.updated_messages.forEach(uMsg => {
+                        const targetRow = document.getElementById(`msgRow_${uMsg.id}`);
+                        if (targetRow) {
+                            if (uMsg.hidden_for_me) {
+                                targetRow.remove();
+                                return;
+                            }
+                            const bEl = targetRow.querySelector('.chat-bubble');
+                            if (bEl) {
+                                if (uMsg.is_deleted == 1) {
+                                    bEl.className = 'chat-bubble is-deleted';
+                                    bEl.innerHTML = '<i class="fa-regular fa-circle-xmark me-1"></i>삭제된 메시지입니다.';
+                                    bEl.onclick = null;
+                                    const dd = targetRow.querySelector('.msg-dropdown-menu');
+                                    if (dd) dd.remove();
+                                } else if (uMsg.is_edited == 1) {
+                                    bEl.innerText = uMsg.message;
+                                }
+                            }
+                        }
+                    });
+                }
+
+                if (res.messages && res.messages.length > 0) {
+                    let newestMessageText = '';
+
+                    res.messages.forEach(msg => {
+                        const msgDateKey = getDateKey(msg.created_at);
+                        if (lastRenderedDate !== msgDateKey) {
+                            const dateDivider = document.createElement('div');
+                            dateDivider.className = 'chat-date-divider';
+                            dateDivider.innerHTML = `<span class="chat-date-pill">${formatChatDate(msg.created_at)}</span>`;
+                            container.appendChild(dateDivider);
+                            lastRenderedDate = msgDateKey;
+                        }
+
+                        const isMine = parseInt(msg.sender_id) === currentUserId;
+                        const row = document.createElement('div');
+                        row.id = `msgRow_${msg.id}`;
+                        row.className = `chat-msg-row ${isMine ? 'mine' : 'theirs'}`;
+
+                        let isDeleted = (msg.is_deleted == 1);
+
+                        let attachmentHtml = '';
+                        if (!isDeleted) {
+                            if (msg.attachment_type === 'IMAGE' && msg.attachment_path) {
+                                attachmentHtml = `<img src="${escapeHtml(msg.attachment_path)}" class="chat-bubble-img d-block mb-1 rounded-3 shadow-sm" style="max-width:210px; cursor:pointer;" alt="사진" onclick="previewImageModal('${escapeHtml(msg.attachment_path)}')">`;
+                            } else if (msg.attachment_type === 'FILE' && msg.attachment_path) {
+                                attachmentHtml = `<a href="${escapeHtml(msg.attachment_path)}" download="${escapeHtml(msg.attachment_orig_name)}" class="chat-file-card d-flex align-items-center gap-2 text-decoration-none p-2 rounded-3 bg-white border mb-1 shadow-sm"><i class="fa-solid fa-file-arrow-down fs-3 text-primary"></i><div class="text-truncate" style="max-width: 170px;"><div class="fw-bold small text-truncate text-dark">${escapeHtml(msg.attachment_orig_name)}</div><small class="text-muted">${(msg.attachment_size / 1024).toFixed(1)} KB</small></div></a>`;
+                            }
+                        }
+
+                        const editedBadge = (!isDeleted && msg.is_edited == 1) ? '<span class="ms-1" style="font-size:0.62rem;color:#6b7280;">(수정됨)</span>' : '';
+
+                        let dropdownMenuHtml = '';
+                        let canEdit = false;
+                        let canDelete = false;
+
+                        if (!isDeleted) {
+                            const createdMs = new Date(msg.created_at.replace(/-/g, '/')).getTime();
+                            const isWithin24h = ((Date.now() - createdMs) <= 86400000);
+
+                            if (isMine) {
+                                canDelete = true;
+                                if (isWithin24h && !msg.attachment_path) {
+                                    canEdit = true;
+                                }
+
+                                dropdownMenuHtml = `
+                                    <div class="msg-dropdown-menu" id="dropdownMenu_${msg.id}">
+                                        ${canEdit ? `<button type="button" class="msg-dropdown-item" onclick="openEditModal(${msg.id}, '${escapeHtml(msg.message)}', '${msg.created_at}')"><i class="fa-solid fa-pen text-primary"></i>수정</button>` : ''}
+                                        ${canDelete ? `<button type="button" class="msg-dropdown-item text-danger" onclick="deleteMessage(${msg.id}, '${msg.created_at}')"><i class="fa-solid fa-trash-can text-danger"></i>삭제</button>` : ''}
+                                    </div>
+                                `;
+                            }
+                        }
+
+                        const displayText = isDeleted ? '<i class="fa-regular fa-circle-xmark me-1"></i>삭제된 메시지입니다.' : escapeHtml(msg.message ? msg.message.trim() : '');
+                        const innerBubble = attachmentHtml + displayText;
+                        const timeHtml = `<span class="chat-meta-time">${formatTimestamp(msg.created_at)}${editedBadge}</span>`;
+                        const bubbleClass = isDeleted ? 'chat-bubble is-deleted' : 'chat-bubble';
+                        const bubbleClickAttr = (!isDeleted && isMine) ? `onclick="toggleMessageDropdown(event, ${msg.id})"` : '';
+
+                        if (isMine) {
+                            row.innerHTML = `
+                                <div class="chat-bubble-combo">
+                                    <div class="${bubbleClass}" ${bubbleClickAttr}>${innerBubble}</div>
+                                    ${dropdownMenuHtml}
+                                    ${timeHtml}
+                                </div>
+                            `;
+                        } else {
+                            let avatarTag = `<div class="chat-avatar-icon"><i class="fa-solid fa-user"></i></div>`;
+                            if (msg.sender_avatar) {
+                                avatarTag = `<img src="${escapeHtml(msg.sender_avatar)}" class="chat-avatar-thumb">`;
+                            }
+                            row.innerHTML = `
+                                <div class="chat-theirs-wrapper">
+                                    ${avatarTag}
+                                    <div class="chat-theirs-content">
+                                        <span class="chat-sender-name">${escapeHtml(msg.sender_name)}</span>
+                                        <div class="chat-bubble-combo">
+                                            <div class="${bubbleClass}">${innerBubble}</div>
+                                            ${timeHtml}
+                                        </div>
+                                    </div>
+                                </div>
+                            `;
+                        }
+
+                        container.appendChild(row);
+                        lastMessageId = Math.max(lastMessageId, parseInt(msg.id));
+
+                        if (isDeleted) newestMessageText = '삭제된 메시지입니다.';
+                        else if (msg.message && msg.message.trim()) newestMessageText = msg.message.trim();
+                        else if (msg.attachment_type === 'IMAGE') newestMessageText = '(사진)';
+                        else if (msg.attachment_type === 'FILE') newestMessageText = '(파일)';
+                    });
+
+                    if (newestMessageText) {
+                        updateSidebarRoomPreview(activeRoomId, newestMessageText);
+                    }
+
+                    scrollToBottom();
+                } else if (lastMessageId === 0) {
+                    container.innerHTML = '<div class="text-center py-5 text-muted small"><i class="fa-regular fa-comments fs-3 mb-2 d-block opacity-50"></i>대화 내역이 없습니다.<br>첫 메시지를 보내 대화를 시작해보세요!</div>';
+                }
+            } else {
+                if (lastMessageId === 0 && initLoader) {
+                    initLoader.innerHTML = `<span class="text-secondary">${escapeHtml(res.message || '대화방을 연결할 수 없습니다.')}</span>`;
+                }
+            }
+        })
+        .catch(err => {
+            console.error(err);
+        });
+}
+
+/* ========================================================================== */
+/* 메시지 전송 처리 */
+/* ========================================================================== */
+function handleSendMessage(e) {
+    if (e) e.preventDefault();
+    const input = document.getElementById('chatInputMessage');
+    const fileInput = document.getElementById('chatFileInput');
+    const message = input.value.trim();
+    const hasFile = fileInput && fileInput.files.length > 0;
+
+    if ((!message && !hasFile) || !activeRoomId) return;
+
+    const btn = document.getElementById('btnSend');
+    btn.disabled = true;
+
+    const fd = new FormData();
+    fd.append('action', 'send_message');
+    fd.append('room_id', activeRoomId);
+    fd.append('message', message);
+    if (hasFile) fd.append('chat_file', fileInput.files[0]);
+
+    fetch('chat_api.php', { method: 'POST', body: fd })
+        .then(r => r.json())
+        .then(res => {
+            btn.disabled = false;
+            if (res.status === 'success') {
+                let previewTxt = message;
+                if (!previewTxt && hasFile) {
+                    const isImg = fileInput.files[0].type.startsWith('image/');
+                    previewTxt = isImg ? '(사진)' : '(파일)';
+                }
+                updateSidebarRoomPreview(activeRoomId, previewTxt);
+
+                input.value = '';
+                input.style.height = '38px';
+                clearFileInput();
+                fetchMessages();
+                setTimeout(scrollToBottom, 60);
+            } else {
+                showCustomAlert(res.message || '전송 실패', 'error');
+            }
+        })
+        .catch(() => { btn.disabled = false; });
+}
+
+document.addEventListener('DOMContentLoaded', function() {
+    if (activeRoomId > 0) {
+        fetchMessages();
+        pollingTimer = setInterval(fetchMessages, 2500);
+    }
+});
+
+window.addEventListener('beforeunload', function() {
+    if (pollingTimer) clearInterval(pollingTimer);
+});
+</script>
+
+<?php
+include_once 'footer.php';
+?>

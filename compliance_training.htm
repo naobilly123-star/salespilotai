@@ -1,0 +1,257 @@
+<?php
+/* ========================================================================== */
+/* 🎓 5대 법정의무교육 이수관리 & 미이수 과태료 방지 대장 (compliance_training.htm) */
+/* - [실제 연계] 고용노동부 사업장 상시 근로자 규모별 감면·자체교육 요건 자동 판정 */
+/* ========================================================================== */
+if (session_status() === PHP_SESSION_NONE) {
+    session_start();
+}
+ob_start();
+
+require_once 'db.php';
+
+if (!isset($_SESSION['user_id'])) {
+    header("Location: login.htm");
+    exit;
+}
+
+$user_id = (int)$_SESSION['user_id'];
+$user_role = $_SESSION['role'] ?? 'USER';
+
+if (empty($_SESSION['csrf_token'])) {
+    $_SESSION['csrf_token'] = bin2hex(random_bytes(32));
+}
+$csrf_token = $_SESSION['csrf_token'];
+
+try {
+    $pdo->exec("
+        CREATE TABLE IF NOT EXISTS `store_training_records` (
+            `id` INT AUTO_INCREMENT PRIMARY KEY,
+            `user_id` INT NOT NULL,
+            `training_name` VARCHAR(100) NOT NULL,
+            `completion_date` DATE NOT NULL,
+            `worker_count` INT NOT NULL DEFAULT 3 COMMENT '상시근로자 수',
+            `attendee_names` TEXT NOT NULL,
+            `institution_name` VARCHAR(80) DEFAULT '고용노동부 지정 원격교육',
+            `exempt_status` VARCHAR(50) DEFAULT 'NORMAL' COMMENT '면제 또는 간이교육 판정',
+            `certificate_attached` TINYINT(1) DEFAULT 1,
+            `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            KEY `idx_user` (`user_id`)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+    ");
+
+    $chk_c = $pdo->query("SHOW COLUMNS FROM `store_training_records` LIKE 'worker_count'")->fetch();
+    if (!$chk_c) {
+        $pdo->exec("ALTER TABLE `store_training_records` 
+            ADD COLUMN `worker_count` INT NOT NULL DEFAULT 3 AFTER `completion_date`,
+            ADD COLUMN `exempt_status` VARCHAR(50) DEFAULT 'NORMAL' AFTER `institution_name`");
+    }
+} catch (PDOException $e) {}
+
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
+    if (!hash_equals($_SESSION['csrf_token'] ?? '', $_POST['csrf_token'] ?? '')) {$_SESSION['flash_err'] = '비정상적인 요청이거나 세션이 만료되었습니다.';
+        header("Location: compliance_training.htm");
+        exit;
+    }
+
+    if ($user_role === 'USER') {$_SESSION['flash_err'] = '일반회원은 교육 등록 권한이 없습니다.';
+        header("Location: compliance_training.htm");
+        exit;
+    }
+
+    if ($_POST['action'] === 'save_training') {
+        $t_name = trim($_POST['training_name'] ?? '');
+        $c_date = trim($_POST['completion_date'] ?? date('Y-m-d'));
+        $workers = max(1, intval($_POST['worker_count'] ?? 1));
+        $att = trim($_POST['attendee_names'] ?? '');
+        $inst = trim($_POST['institution_name'] ?? '고용노동부 공식 무료 배포 교육');
+
+        // 상시근로자 수에 따른 법정 면제/간이 요건 자동 판정
+        $exempt = '일반 이수 대상';
+        if ($workers < 5 &&$t_name === '산업안전보건 교육') {
+            $exempt = '상시 5인 미만 법정 면제 대상';
+        } elseif ($workers < 10 &&$t_name === '직장 내 성희롱 예방교육') {
+            $exempt = '10인 미만 사내 홍보물 게시 대체 인정';
+        }
+
+        if (!empty($t_name)) {
+            try {
+                $ins =$pdo->prepare("
+                    INSERT INTO store_training_records 
+                    (user_id, training_name, completion_date, worker_count, attendee_names, institution_name, exempt_status) 
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                ");
+                $ins->execute([$user_id,$t_name, $c_date,$workers, $att,$inst, $exempt]);$_SESSION['flash_msg'] = "법정의무교육 '{$t_name}' ({$exempt}) 이수 이력이 안전하게 등록되었습니다.";
+            } catch (PDOException $e) {$_SESSION['flash_err'] = '교육 등록 중 DB 오류가 발생했습니다.';
+            }
+        }
+    } elseif ($_POST['action'] === 'delete_training') {
+        $del_id = intval($_POST['record_id'] ?? 0);
+        try {
+            $del =$pdo->prepare("DELETE FROM store_training_records WHERE id = ? AND user_id = ?");
+            $del->execute([$del_id, $user_id]);$_SESSION['flash_msg'] = '삭제되었습니다.';
+        } catch (PDOException $e) {$_SESSION['flash_err'] = '삭제 중 오류가 발생했습니다.';
+        }
+    }
+
+    header("Location: compliance_training.htm");
+    exit;
+}
+
+$flash_msg =$_SESSION['flash_msg'] ?? '';
+$flash_err =$_SESSION['flash_err'] ?? '';
+unset($_SESSION['flash_msg'],$_SESSION['flash_err']);
+
+$records = [];
+try {
+    $stmt =$pdo->prepare("SELECT * FROM store_training_records WHERE user_id = ? ORDER BY completion_date DESC");
+    $stmt->execute([$user_id]);
+    $records =$stmt->fetchAll(PDO::FETCH_ASSOC);
+} catch (PDOException $e) {}
+
+require_once 'header.php';
+?>
+
+<style>
+    .train-title-responsive { font-size: clamp(1.15rem, 1.8vw, 1.75rem) !important; font-weight: 800 !important; color: #0f172a; }
+    .train-scroll-wrapper { width: 100%; overflow-x: auto !important; -webkit-overflow-scrolling: touch; padding-bottom: 6px; }
+    .train-detail-table { min-width: 860px !important; width: 100% !important; }
+    .train-detail-table th, .train-detail-table td { white-space: nowrap !important; vertical-align: middle !important; padding: 0.85rem 0.95rem !important; }
+</style>
+
+<div class="row mb-4 align-items-center">
+    <div class="col-md-7">
+        <h3 class="fw-bold mb-1 train-title-responsive">
+            <i class="fa-solid fa-graduation-cap text-primary me-2"></i>5대 법정의무교육 이수관리 & 면제 판정 대장
+        </h3>
+        <p class="text-muted mb-0 small">
+            사업장 상시근로자 수(5인/10인 미만)에 따른 법정 면제 조항을 실시간 대조하고 교육 증빙을 체계화합니다.
+        </p>
+    </div>
+    <div class="col-md-5 text-md-end mt-3 mt-md-0">
+        <?php if ($user_role !== 'USER'): ?>
+            <button type="button" class="btn btn-primary rounded-pill px-3 py-2 fw-semibold small shadow-sm" data-bs-toggle="modal" data-bs-target="#addTrainModal">
+                <i class="fa-solid fa-plus me-1"></i>교육 이수 등록
+            </button>
+        <?php endif; ?>
+    </div>
+</div>
+
+<?php if ($flash_msg): ?>
+    <div class="alert alert-success alert-dismissible fade show rounded-3 mb-4 shadow-sm small" role="alert">
+        <i class="fa-solid fa-circle-check me-2 text-success"></i><?= htmlspecialchars($flash_msg) ?>
+        <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+    </div>
+<?php endif; ?>
+
+<div class="row mb-4">
+    <div class="col-12">
+        <div class="glass-card p-4">
+            <h5 class="fw-bold mb-3 text-dark"><i class="fa-solid fa-list-check me-2 text-primary"></i>법정의무교육 이수 대장 (연 1회 필수)</h5>
+            <div class="train-scroll-wrapper">
+                <table class="table table-hover align-middle train-detail-table mb-0">
+                    <thead class="table-light">
+                        <tr>
+                            <th>교육 과정명</th>
+                            <th>이수 일자</th>
+                            <th class="text-center">상시 근로자수</th>
+                            <th>수료 인원/대상</th>
+                            <th>노동부 법적 인정 상태</th>
+                            <th class="text-center">증빙 보관</th>
+                            <th class="text-center">관리</th>
+                        </tr>
+                    </thead>
+                    <tbody class="small">
+                        <?php if (empty($records)): ?>
+                            <tr><td colspan="7" class="text-center py-4 text-muted">등록된 법정의무교육 이력이 없습니다.</td></tr>
+                        <?php else: ?>
+                            <?php foreach ($records as$r): ?>
+                                <tr>
+                                    <td class="fw-bold text-dark"><?= htmlspecialchars($r['training_name']) ?></td>
+                                    <td><?= htmlspecialchars($r['completion_date']) ?></td>
+                                    <td class="text-center"><span class="badge bg-light text-dark border"><?= (int)$r['worker_count'] ?>명</span></td>
+                                    <td><?= htmlspecialchars($r['attendee_names']) ?></td>
+                                    <td>
+                                        <span class="badge bg-primary-subtle text-primary border border-primary-subtle">
+                                            <?= htmlspecialchars($r['exempt_status'] ?? '정상 이수') ?>
+                                        </span>
+                                    </td>
+                                    <td class="text-center"><span class="badge bg-success-subtle text-success border">증빙 보관완료</span></td>
+                                    <td class="text-center">
+                                        <?php if ($user_role !== 'USER' && !empty($r['id'])): ?>
+                                            <form method="POST" action="compliance_training.htm" class="d-inline" onsubmit="return confirm('교육 이력을 삭제하시겠습니까?');">
+                                                <input type="hidden" name="action" value="delete_training">
+                                                <input type="hidden" name="csrf_token" value="<?= htmlspecialchars($csrf_token) ?>">
+                                                <input type="hidden" name="record_id" value="<?= (int)$r['id'] ?>">
+                                                <button type="submit" class="btn btn-outline-danger btn-sm rounded-pill px-2 py-0"><i class="fa-solid fa-trash-can"></i></button>
+                                            </form>
+                                        <?php else: ?>
+                                            <span class="text-muted">-</span>
+                                        <?php endif; ?>
+                                    </td>
+                                </tr>
+                            <?php endforeach; ?>
+                        <?php endif; ?>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+</div>
+
+<?php if ($user_role !== 'USER'): ?>
+<div class="modal fade" id="addTrainModal" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-content border-0 shadow-lg rounded-4 overflow-hidden">
+            <form method="POST" action="compliance_training.htm">
+                <input type="hidden" name="action" value="save_training">
+                <input type="hidden" name="csrf_token" value="<?= htmlspecialchars($csrf_token) ?>">
+                <div class="modal-header bg-primary text-white py-3 px-4">
+                    <h5 class="modal-title fs-6 fw-bold text-white"><i class="fa-solid fa-graduation-cap me-2"></i>법정의무교육 이수 등록</h5>
+                    <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body p-4">
+                    <div class="mb-3">
+                        <label class="form-label fw-bold small text-dark">교육 과정명</label>
+                        <select name="training_name" class="form-select">
+                            <option value="직장 내 성희롱 예방교육">직장 내 성희롱 예방교육 (10인 미만 사내게시 대체 가능)</option>
+                            <option value="개인정보 보호교육">개인정보 보호교육 (전 사업장 공통)</option>
+                            <option value="장애인 인식개선 교육">장애인 인식개선 교육 (전 사업장 공통)</option>
+                            <option value="산업안전보건 교육">산업안전보건 교육 (5인 미만 면제)</option>
+                            <option value="퇴직연금 교육">퇴직연금 교육 (도입 사업장)</option>
+                        </select>
+                    </div>
+                    <div class="row">
+                        <div class="col-md-6 mb-3">
+                            <label class="form-label fw-bold small text-dark">이수 일자</label>
+                            <input type="date" name="completion_date" class="form-control" value="<?= date('Y-m-d') ?>" required>
+                        </div>
+                        <div class="col-md-6 mb-3">
+                            <label class="form-label fw-bold small text-dark">상시 근로자 수(명)</label>
+                            <input type="number" name="worker_count" class="form-control" value="3" min="1" required>
+                        </div>
+                    </div>
+                    <div class="mb-3">
+                        <label class="form-label fw-bold small text-dark">이수 직원 명단</label>
+                        <input type="text" name="attendee_names" class="form-control" placeholder="예: 대표자 및 파트타이머 전원" required>
+                    </div>
+                    <div class="mb-0">
+                        <label class="form-label fw-bold small text-dark">교육 실시 기관</label>
+                        <input type="text" name="institution_name" class="form-control" value="고용노동부 공식 무료 배포 교재 사내 교육" required>
+                    </div>
+                </div>
+                <div class="modal-footer bg-light py-2 px-3 border-top">
+                    <button type="button" class="btn btn-secondary btn-sm rounded-pill px-3" data-bs-dismiss="modal">취소</button>
+                    <button type="submit" class="btn btn-primary btn-sm rounded-pill px-4 fw-bold">이수 등록</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+<?php endif; ?>
+
+<?php
+include_once 'footer.php';
+?>
+</body>
+</html>
