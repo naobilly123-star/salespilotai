@@ -182,12 +182,9 @@ require_once 'header.php';
                                 <td><span class="badge bg-warning-subtle text-warning-emphasis border"><?= htmlspecialchars($it['allergy_triggers'] ?: '해당 없음') ?></span></td>
                                 <td class="text-center">
                                     <?php if ($user_role !== 'USER' && !empty($it['id'])): ?>
-                                        <form method="POST" action="allergy_origin_board.htm" class="d-inline" onsubmit="return confirm('이 항목을 삭제하시겠습니까?');">
-                                            <input type="hidden" name="action" value="delete_item">
-                                            <input type="hidden" name="csrf_token" value="<?= htmlspecialchars($csrf_token) ?>">
-                                            <input type="hidden" name="item_id" value="<?= (int)$it['id'] ?>">
-                                            <button type="submit" class="btn btn-outline-danger btn-sm rounded-pill px-2 py-0"><i class="fa-solid fa-trash-can"></i></button>
-                                        </form>
+                                        <button type="button" class="btn btn-outline-danger btn-sm rounded-pill px-2 py-0" onclick="triggerDeleteBoardItem(<?= (int)$it['id'] ?>, '<?= htmlspecialchars(addslashes($it['menu_name'])) ?>')">
+                                            <i class="fa-solid fa-trash-can"></i>
+                                        </button>
                                     <?php else: ?>
                                         <span class="text-muted">-</span>
                                     <?php endif; ?>
@@ -239,6 +236,31 @@ require_once 'header.php';
     </div>
 </div>
 
+<!-- 개별 삭제 모달 (기존 규격 준수) -->
+<div class="modal fade btn-print-hide" id="deleteBoardItemModal" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered modal-sm">
+        <div class="modal-content border-0 shadow-lg rounded-4 overflow-hidden">
+            <div class="modal-header bg-danger text-white py-2 px-3">
+                <h6 class="modal-title fw-bold fs-6"><i class="fa-solid fa-trash-can me-1"></i>항목 삭제 확인</h6>
+                <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+            </div>
+            <form method="POST" action="allergy_origin_board.htm">
+                <input type="hidden" name="action" value="delete_item">
+                <input type="hidden" name="csrf_token" value="<?= htmlspecialchars($csrf_token) ?>">
+                <input type="hidden" name="item_id" id="deleteModalItemId" value="">
+                <div class="modal-body p-3 text-center">
+                    <p class="mb-1 text-dark fw-bold" id="deleteModalItemTitle">항목을 삭제하시겠습니까?</p>
+                    <small class="text-muted">삭제 시 원산지 대장에서 즉시 제거됩니다.</small>
+                </div>
+                <div class="modal-footer bg-light py-2 px-3 justify-content-center">
+                    <button type="button" class="btn btn-secondary btn-sm rounded-pill px-3" data-bs-dismiss="modal">취소</button>
+                    <button type="submit" class="btn btn-danger btn-sm rounded-pill px-3 fw-bold">삭제 확정</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
 <?php if ($user_role !== 'USER'): ?>
 <div class="modal fade btn-print-hide" id="addItemModal" tabindex="-1" aria-hidden="true">
     <div class="modal-dialog modal-dialog-centered modal-lg">
@@ -268,7 +290,7 @@ require_once 'header.php';
                     <div class="mb-0">
                         <label class="form-label fw-bold small text-dark d-block mb-2">함유 알레르기 유발물질 체크 (19종)</label>
                         <div class="row g-2">
-                            <?php foreach ($official_allergies as$alg): ?>
+                            <?php foreach ($official_allergies as $alg): ?>
                                 <div class="col-4 col-md-3">
                                     <div class="form-check">
                                         <input class="form-check-input" type="checkbox" name="allergy_list[]" value="<?= $alg ?>" id="alg_<?= md5($alg) ?>">
@@ -288,6 +310,17 @@ require_once 'header.php';
     </div>
 </div>
 <?php endif; ?>
+
+<script>
+function triggerDeleteBoardItem(id, name) {
+    document.getElementById('deleteModalItemId').value = id;
+    document.getElementById('deleteModalItemTitle').innerText = `"${name}" 항목을 삭제하시겠습니까?`;
+    if (typeof bootstrap !== 'undefined') {
+        const delModal = new bootstrap.Modal(document.getElementById('deleteBoardItemModal'));
+        delModal.show();
+    }
+}
+</script>
 
 <?php
 include_once 'footer.php';

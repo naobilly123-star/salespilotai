@@ -3,8 +3,7 @@
 require_once 'db.php';
 require_once 'header.php';
 
-$user_id = $_SESSION['user_id'];
-$today_date = date('Y-m-d');
+$user_id = $_SESSION['user_id'];$today_date = date('Y-m-d');
 
 /* 1. DB에서 현재 로그인한 사용자의 매장 주소 가져오기 및 위경도 매핑 */
 $latitude = 37.58;
@@ -12,12 +11,12 @@ $longitude = 127.00;
 $store_address = "서울 기본 상권 기준";
 
 try {
-    $stmt_store = $pdo->prepare("SELECT store_name, address FROM stores WHERE user_id = :user_id AND is_active = 1 LIMIT 1");
-    $stmt_store->execute([':user_id' => $user_id]);
-    $store_info = $stmt_store->fetch();
+    $stmt_store =$pdo->prepare("SELECT store_name, address FROM stores WHERE user_id = :user_id AND is_active = 1 LIMIT 1");
+    $stmt_store->execute([':user_id' =>$user_id]);
+    $store_info =$stmt_store->fetch();
 
     if ($store_info && !empty($store_info['address'])) {
-        $store_address = $store_info['address'];
+        $store_address =$store_info['address'];
 
         $geo_resolved = false;
         $geo_query = urlencode(trim($store_address));
@@ -34,10 +33,7 @@ try {
 
         if ($geo_code === 200 && !empty($geo_res)) {
             $geo_data = json_decode($geo_res, true);
-            if (!empty($geo_data[0]['lat']) && !empty($geo_data[0]['lon'])) {
-                $latitude = round(floatval($geo_data[0]['lat']), 4);
-                $longitude = round(floatval($geo_data[0]['lon']), 4);
-                $geo_resolved = true;
+            if (!empty($geo_data[0]['lat']) && !empty($geo_data[0]['lon'])) {$latitude = round(floatval($geo_data[0]['lat']), 4);$longitude = round(floatval($geo_data[0]['lon']), 4);$geo_resolved = true;
             }
         }
 
@@ -61,13 +57,12 @@ try {
             }
         }
     }
-} catch (PDOException $e) {}
+} catch (PDOException$e) {}
 
 $is_api_connected = false;
 $api_status_msg = "시뮬레이션 모드 (API 키 미설정/통신대기)";
 
-$forecast_weather = 'Rainy';
-$current_temp = 20;
+$forecast_weather = 'Rainy';$current_temp = 20;
 $temp_high = 24;
 $temp_low = 18;
 $pop_rain_rate = 80;
@@ -95,8 +90,7 @@ try {
     if ($http_code === 200 && !empty($response)) {
         $json_data = json_decode($response, true);
         
-        if (isset($json_data['current']) || isset($json_data['daily'])) {
-            $weather_code = intval($json_data['current']['weather_code'] ?? ($json_data['daily']['weather_code'][0] ?? 0));
+        if (isset($json_data['current']) || isset($json_data['daily'])) {$weather_code = intval($json_data['current']['weather_code'] ?? ($json_data['daily']['weather_code'][0] ?? 0));
             $current_temp = round(floatval($json_data['current']['temperature_2m'] ?? 20));
 
             if (isset($json_data['daily']['temperature_2m_max'][0])) {
@@ -105,12 +99,9 @@ try {
                 $pop_rain_rate = intval($json_data['daily']['precipitation_probability_max'][0] ?? 0);
             }
 
-            if (in_array($weather_code, [51, 53, 55, 56, 57, 61, 63, 65, 66, 67, 80, 81, 82, 95, 96, 99])) {
-                $forecast_weather = 'Rainy';
-            } elseif (in_array($weather_code, [71, 73, 75, 77, 85, 86])) {
-                $forecast_weather = 'Snow';
-            } elseif (in_array($weather_code, [1, 2, 3, 45, 48])) {
-                $forecast_weather = 'Cloudy';
+            if (in_array($weather_code, [51, 53, 55, 56, 57, 61, 63, 65, 66, 67, 80, 81, 82, 95, 96, 99])) {$forecast_weather = 'Rainy';
+            } elseif (in_array($weather_code, [71, 73, 75, 77, 85, 86])) {$forecast_weather = 'Snow';
+            } elseif (in_array($weather_code, [1, 2, 3, 45, 48])) {$forecast_weather = 'Cloudy';
             } else {
                 $forecast_weather = 'Clear';
             }
@@ -119,25 +110,21 @@ try {
             $api_status_msg = "Open-Meteo 실시간 날씨 연동 완료";
         }
     }
-} catch (Exception $e) {
-    $is_api_connected = false;
+} catch (Exception $e) {$is_api_connected = false;
     $api_status_msg = "API 통신 오류 - 가상 데이터 모드 전환";
 }
 
-if ($forecast_weather === 'Rainy') {
-    $delivery_change = 28.5;
+if ($forecast_weather === 'Rainy') {$delivery_change = 28.5;
     $hall_change = -18.2;
     $stock_recommendation = "현재 우천 기상 조건(강수확률 {$pop_rain_rate}%)으로 인해 홀 방문 고객 감소가 예상됩니다. 배달용 용기 및 인기 배달 메뉴(찌개/전류) 원자재 재고를 20% 추가 확보하세요.";
     $weather_icon = "fa-cloud-showers-heavy text-info";
     $weather_kr = "비 내림 (강수확률 {$pop_rain_rate}%)";
-} elseif ($forecast_weather === 'Snow') {
-    $delivery_change = 35.0; 
+} elseif ($forecast_weather === 'Snow') {$delivery_change = 35.0; 
     $hall_change = -25.0;   
     $stock_recommendation = "현재 눈이 내리고 있습니다. 배달 주문 급증에 대비하여 라이더 수급 상황을 점검하고, 빙판길 안전 배달 안내를 준비하세요.";
     $weather_icon = "fa-snowflake text-primary";
     $weather_kr = "눈 내림 (강수확률 {$pop_rain_rate}%)";
-} elseif ($forecast_weather === 'Cloudy') {
-    $delivery_change = 5.0;
+} elseif ($forecast_weather === 'Cloudy') {$delivery_change = 5.0;
     $hall_change = 2.0;
     $stock_recommendation = "현재 구름 많은 흐린 날씨입니다. 평시와 비슷한 수준의 평탄한 매출 흐름이 예상됩니다.";
     $weather_icon = "fa-cloud text-secondary";
@@ -301,7 +288,12 @@ function generateDynamicHourlyLabels() {
 
 const dynamicLabels = generateDynamicHourlyLabels();
 
-const forecastChart = new Chart(document.getElementById('forecastChart'), {
+const chartCtx = document.getElementById('forecastChart');
+if (window.forecastChartInstance) {
+    window.forecastChartInstance.destroy();
+}
+
+window.forecastChartInstance = new Chart(chartCtx, {
     type: 'bar',
     data: {
         labels: dynamicLabels,

@@ -45,7 +45,8 @@ try {
 
 /* POST 요청 처리: API 키, 소셜 인증키 및 SEO 설정 일괄 저장 (CSRF 검증 적용) */
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_settings'])) {
-    if (!hash_equals($_SESSION['csrf_token'] ?? '', $_POST['csrf_token'] ?? '')) {$_SESSION['flash_err'] = '비정상적인 요청이거나 세션이 만료되었습니다.';
+    if (!hash_equals($_SESSION['csrf_token'] ?? '', $_POST['csrf_token'] ?? '')) {
+        $_SESSION['flash_err'] = '비정상적인 요청이거나 세션이 만료되었습니다.';
         header("Location: admin_site_settings.htm");
         exit;
     }
@@ -87,14 +88,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_settings'])) {
 
     try {
         $pdo->beginTransaction();
-        $upsert_stmt =$pdo->prepare("
+        $upsert_stmt = $pdo->prepare("
             INSERT INTO site_settings (setting_key, setting_value) 
             VALUES (?, ?) 
             ON DUPLICATE KEY UPDATE setting_value = VALUES(setting_value)
         ");
 
-        foreach ($allowed_keys as$key) {
-            $val = trim($_POST[$key] ?? '');$upsert_stmt->execute([$key,$val]);
+        foreach ($allowed_keys as $key) {
+            $val = trim($_POST[$key] ?? '');
+            $upsert_stmt->execute([$key, $val]);
         }
 
         // 공공데이터포털 호환 동기화
@@ -104,9 +106,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_settings'])) {
             $upsert_stmt->execute(['api_public_portal_key', trim($_POST['data_go_kr_api_key'])]);
         }
 
-        $pdo->commit();$_SESSION['flash_msg'] = "소셜 로그인 키, 외부 API 및 SEO 환경설정이 성공적으로 저장되었습니다.";
+        $pdo->commit();
+        $_SESSION['flash_msg'] = "소셜 로그인 키, 외부 API 및 SEO 환경설정이 성공적으로 저장되었습니다.";
     } catch (Exception $e) {
-        if ($pdo->inTransaction()) {$pdo->rollBack();
+        if ($pdo->inTransaction()) {
+            $pdo->rollBack();
         }
         $_SESSION['flash_err'] = "설정 저장 중 오류가 발생했습니다: " . $e->getMessage();
     }
@@ -115,18 +119,19 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['save_settings'])) {
     exit;
 }
 
-$flash_msg =$_SESSION['flash_msg'] ?? '';
-$flash_err =$_SESSION['flash_err'] ?? '';
-unset($_SESSION['flash_msg'],$_SESSION['flash_err']);
+$flash_msg = $_SESSION['flash_msg'] ?? '';
+$flash_err = $_SESSION['flash_err'] ?? '';
+unset($_SESSION['flash_msg'], $_SESSION['flash_err']);
 
 $saved_settings = [];
 try {
-    $set_stmt =$pdo->query("SELECT setting_key, setting_value FROM site_settings");
-    while ($row = $set_stmt->fetch(PDO::FETCH_ASSOC)) {$saved_settings[$row['setting_key']] =$row['setting_value'];
+    $set_stmt = $pdo->query("SELECT setting_key, setting_value FROM site_settings");
+    while ($row = $set_stmt->fetch(PDO::FETCH_ASSOC)) {
+        $saved_settings[$row['setting_key']] = $row['setting_value'];
     }
 } catch (PDOException $e) {}
 
-function getSetting($key,$default = '') {
+function getSetting($key, $default = '') {
     global $saved_settings;
     return htmlspecialchars($saved_settings[$key] ?? $default, ENT_QUOTES, 'UTF-8');
 }
