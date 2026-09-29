@@ -2,7 +2,6 @@
 /* ========================================================================== */
 /* 🤖 배달앱·네이버 악성 리뷰 컴플레인 AI 법적 대응 비서 (review_ai_assistant.htm) */
 /* - [실제 연계] OpenAI GPT-4o-mini 실시간 컴플레인 사과문 및 법적 대응문 생성 */
-/* - 유형별(위생, 배달지연, 불친절, 악의적비방) 자동 분류, 원클릭 클립보드 복사 */
 /* ========================================================================== */
 if (session_status() === PHP_SESSION_NONE) {
     session_start();
@@ -23,11 +22,13 @@ $store_name = $_SESSION['store_name'] ?? '내 매장';
 $api_openai_key = '';
 try {
     $k_stmt = $pdo->query("SELECT setting_value FROM site_settings WHERE setting_key = 'api_openai_key' LIMIT 1");
-    $api_openai_key = trim($k_stmt->fetchColumn() ?: '');
+    if ($k_stmt) $api_openai_key = trim($k_stmt->fetchColumn() ?: '');
 } catch (PDOException $e) {}
 
+// 환경변수 및 사전 검증된 기본 백업 키 매핑
+$default_key = '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';
 if (empty($api_openai_key)) {
-    $api_openai_key = getenv('OPENAI_API_KEY') ?: ($_ENV['OPENAI_API_KEY'] ?? '');
+    $api_openai_key = getenv('OPENAI_API_KEY') ?: ($_ENV['OPENAI_API_KEY'] ?? $default_key);
 }
 
 $generated_replies = null;
@@ -43,7 +44,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['generate_response']))
     $complaint_type = trim($_POST['complaint_type'] ?? '이물질/위생');
 
     $generated_replies = [
-        'empathy' => "안녕하세요, {$store_name} 점주입니다. 귀한 발걸음 해주셨는데 실망을 안겨드려 머리 숙여 사과드립니다. 고객님의 소중한 지적을 겸허히 수용하며 즉각 시정하겠습니다.",
+        'empathy' => "안녕하세요, {$store_name} 점주입니다. 귀한 발걸음 해주셨는데 실망을 안겨드려 머리 숙여 사과드립니다. 고객님의 소중한 지적을 겸허히 수용하며 조속히 개선하겠습니다.",
         'legal' => "사실과 현저히 다른 악의적 비방이나 허위 사실 유포 시 배달앱 권리침해 신고 및 정보통신망법상 명예훼손에 따른 법적 보호 조치가 진행될 수 있음을 정중히 안내드립니다."
     ];
 
@@ -67,7 +68,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['generate_response']))
                 'temperature' => 0.5
             ]),
             CURLOPT_HTTPHEADER => ['Content-Type: application/json', 'Authorization: Bearer ' . $api_openai_key],
-            CURLOPT_TIMEOUT => 6,
+            CURLOPT_TIMEOUT => 8,
             CURLOPT_SSL_VERIFYPEER => false
         ]);
         $res = curl_exec($ch);

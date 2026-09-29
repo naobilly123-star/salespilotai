@@ -65,13 +65,49 @@ if (!empty($api_portal_key)) {
     }
 }
 
-// DB에서 해당 월 일별 매출 집계
+// DB에서 해당 월 일별 매출 집계 (날짜 컬럼명 및 user_id/biz_no 동적 크로스체크)
 $monthly_data = [];
 try {
-    $stmt = $pdo->prepare("SELECT sales_date, SUM(amount) as total FROM sales_data WHERE user_id = ? AND sales_date BETWEEN ? AND ? GROUP BY sales_date");
-    $stmt->execute([$user_id, $start_date, $end_date]);
+    $date_col = 'sales_date';
+    $has_biz_col = false;
+    $has_user_col = false;
+    try {
+        $cols = $pdo->query("SHOW COLUMNS FROM sales_data")->fetchAll(PDO::FETCH_COLUMN);
+        if (!in_array('sales_date', $cols) && in_array('sale_date', $cols)) $date_col = 'sale_date';
+        if (in_array('biz_no', $cols)) $has_biz_col = true;
+        if (in_array('user_id', $cols)) $has_user_col = true;
+    } catch (Exception $e) {}
+
+    $u_biz = '';
+    try {
+        $b_stmt = $pdo->prepare("SELECT biz_no FROM users WHERE id = ?");
+        $b_stmt->execute([$user_id]);
+        $u_biz = preg_replace('/[^0-9]/', '', $b_stmt->fetchColumn() ?: '');
+    } catch (Exception $e) {}
+
+    $where = [];
+    $params = [];
+    if ($has_user_col && $has_biz_col && !empty($u_biz)) {
+        $where[] = "(user_id = ? OR biz_no = ?)";
+        $params[] = $user_id;
+        $params[] = $u_biz;
+    } elseif ($has_user_col) {
+        $where[] = "user_id = ?";
+        $params[] = $user_id;
+    } elseif ($has_biz_col && !empty($u_biz)) {
+        $where[] = "biz_no = ?";
+        $params[] = $u_biz;
+    }
+
+    $where[] = "{$date_col} BETWEEN ? AND ?";
+    $params[] = $start_date;
+    $params[] = $end_date;
+
+    $where_sql = implode(' AND ', $where);
+    $stmt = $pdo->prepare("SELECT {$date_col} as s_date, SUM(amount) as total FROM sales_data WHERE {$where_sql} GROUP BY {$date_col}");
+    $stmt->execute($params);
     while ($row = $stmt->fetch(PDO::FETCH_ASSOC)) {
-        $monthly_data[$row['sales_date']] = (int)$row['total'];
+        $monthly_data[$row['s_date']] = (int)$row['total'];
     }
 } catch (PDOException $e) {}
 

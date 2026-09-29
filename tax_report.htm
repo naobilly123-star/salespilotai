@@ -83,16 +83,43 @@ try {
     $exp_stmt->execute([$user_id]);
     if ($exp = $exp_stmt->fetch(PDO::FETCH_ASSOC)) {$monthly_rent = (int)($exp['monthly_rent'] ?? 1500000);$labor_cost = (int)($exp['labor_cost'] ?? 2500000);$material_rate = (float)($exp['material_cost_rate'] ?? 35.0);$delivery_rate = (float)($exp['delivery_fee_rate'] ?? 12.0);     } } catch (PDOException$e) {}
 
+// 실제 DB 매출 집계 (날짜 컬럼명 및 user_id/biz_no 동적 크로스 매핑)
 $total_monthly_sales = 0;
 try {
-    $sales_stmt =$pdo->prepare("SELECT COALESCE(SUM(amount), 0) FROM sales_data WHERE user_id = ? AND sales_date >= DATE_SUB(CURRENT_DATE(), INTERVAL 30 DAY)");
-    $sales_stmt->execute([$user_id]);
+    $date_col = 'sales_date';$has_biz_col = false;
+    $has_user_col = false;
+    try {
+        $cols =$pdo->query("SHOW COLUMNS FROM sales_data")->fetchAll(PDO::FETCH_COLUMN);
+        if (!in_array('sales_date', $cols) && in_array('sale_date', $cols))$date_col = 'sale_date';
+        if (in_array('biz_no', $cols))$has_biz_col = true;
+        if (in_array('user_id', $cols))$has_user_col = true;
+    } catch (Exception $e) {}
+
+    $u_biz = '';
+    try {
+        $b_stmt =$pdo->prepare("SELECT biz_no FROM users WHERE id = ?");
+        $b_stmt->execute([$user_id]);
+        $u_biz = preg_replace('/[^0-9]/', '',$b_stmt->fetchColumn() ?: '');
+    } catch (Exception $e) {}
+
+    $cond = "1=1";
+    $params = [];
+    if ($has_user_col &&$has_biz_col && !empty($u_biz)) {$cond = "(user_id = ? OR biz_no = ?)";
+        $params = [$user_id,$u_biz];
+    } elseif ($has_user_col) {$cond = "user_id = ?";
+        $params = [$user_id];
+    } elseif ($has_biz_col && !empty($u_biz)) {$cond = "biz_no = ?";
+        $params = [$u_biz];
+    }
+
+    $sales_stmt =$pdo->prepare("SELECT COALESCE(SUM(amount), 0) FROM sales_data WHERE {$cond} AND {$date_col} >= DATE_SUB(CURRENT_DATE(), INTERVAL 30 DAY)");
+    $sales_stmt->execute($params);
     $total_monthly_sales = (int)$sales_stmt->fetchColumn();
 } catch (PDOException $e) {}
 
 if ($total_monthly_sales <= 0)$total_monthly_sales = 18500000;
 
-// 0으로 나누기(Division by zero) 원천 방어용 분모
+// 0으로 나누기 방어 분모
 $safe_sales = max(1,$total_monthly_sales);
 
 $calc_material_cost = round($total_monthly_sales * ($material_rate / 100));

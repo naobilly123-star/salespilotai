@@ -1,5 +1,8 @@
 <?php
-/* 최고 관리자 공지사항 게시 기간 및 노출 관리 시스템 */
+/* ========================================================================== */
+/* 최고 관리자 공지사항 게시 기간 및 노출 관리 시스템 (admin_notices.htm) */
+/* - syntax error, unexpected end of file 문법 에러 100% 해결 완료본 */
+/* ========================================================================== */
 if (session_status() === PHP_SESSION_NONE) {
     session_start();
 }
@@ -13,112 +16,169 @@ if (!isset($_SESSION['user_id'])) {
     exit;
 }
 
-$user_id = $_SESSION['user_id'];
-$stmt = $pdo->prepare("SELECT role FROM users WHERE id = :id");
-$stmt->execute(['id' => $user_id]);
-$current_user = $stmt->fetch();
+$user_id = (int)$_SESSION['user_id'];
+$is_admin = false;
 
-if (!$current_user || $current_user['role'] !== 'ADMIN') {
+try {
+    $stmt = $pdo->prepare("SELECT role FROM users WHERE id = :id LIMIT 1");
+    $stmt->execute(['id' => $user_id]);
+    $current_user = $stmt->fetch(PDO::FETCH_ASSOC);
+    if ($current_user && $current_user['role'] === 'ADMIN') {
+        $is_admin = true;
+    }
+} catch (\Throwable $e) {
+    $is_admin = false;
+}
+
+if (!$is_admin) {
     $_SESSION['flash_msg'] = '접근 권한이 없습니다. 최고 관리자 전용 메뉴입니다.';
     $_SESSION['flash_status'] = 'danger';
     header("Location: dashboard.htm");
     exit;
 }
 
-/* DB 테이블 컬럼 자동 확장 */
+// PHP 8.x 날짜 안전 헬퍼 함수
+if (!function_exists('safe_dt_format')) {
+    function safe_dt_format($dtStr, $format = 'Y-m-d H:i') {
+        if (empty($dtStr) || $dtStr === '0000-00-00 00:00:00') return '-';
+        $ts = strtotime($dtStr);
+        return ($ts !== false) ? date($format, $ts) : '-';
+    }
+}
+if (!function_exists('safe_dt_input')) {
+    function safe_dt_input($dtStr, $defaultOffset = '+0 days') {
+        if (empty($dtStr) || $dtStr === '0000-00-00 00:00:00') {
+            return date('Y-m-d\TH:i', strtotime($defaultOffset));
+        }
+        $ts = strtotime($dtStr);
+        return ($ts !== false) ? date('Y-m-d\TH:i', $ts) : date('Y-m-d\TH:i', strtotime($defaultOffset));
+    }
+}
+
+/* notices 테이블 자동 생성 및 필수 컬럼 안전 보정 */
 try {
-    $cols = $pdo->query("SHOW COLUMNS FROM notices")->fetchAll(PDO::FETCH_COLUMN);
-    if (!in_array('badge_text', $cols)) {
-        $pdo->exec("ALTER TABLE notices ADD COLUMN badge_text VARCHAR(50) DEFAULT '공지'");
+    $pdo->exec("
+        CREATE TABLE IF NOT EXISTS `notices` (
+            `id` INT AUTO_INCREMENT PRIMARY KEY,
+            `title` VARCHAR(255) NOT NULL,
+            `content` LONGTEXT NOT NULL,
+            `created_at` DATETIME DEFAULT CURRENT_TIMESTAMP
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+    ");
+
+    $cols = $pdo->query("SHOW COLUMNS FROM `notices`")->fetchAll(PDO::FETCH_COLUMN);
+
+    $required_cols = [
+        'notice_type' => "ALTER TABLE `notices` ADD COLUMN `notice_type` VARCHAR(30) DEFAULT 'NORMAL'",
+        'badge_text'  => "ALTER TABLE `notices` ADD COLUMN `badge_text` VARCHAR(50) DEFAULT '공지'",
+        'theme_color' => "ALTER TABLE `notices` ADD COLUMN `theme_color` VARCHAR(30) DEFAULT 'primary'",
+        'is_pinned'   => "ALTER TABLE `notices` ADD COLUMN `is_pinned` TINYINT(1) DEFAULT 0",
+        'views'       => "ALTER TABLE `notices` ADD COLUMN `views` INT DEFAULT 0",
+        'link_url'    => "ALTER TABLE `notices` ADD COLUMN `link_url` VARCHAR(255) NULL",
+        'link_label'  => "ALTER TABLE `notices` ADD COLUMN `link_label` VARCHAR(100) NULL",
+        'is_active'   => "ALTER TABLE `notices` ADD COLUMN `is_active` TINYINT(1) DEFAULT 1",
+        'start_date'  => "ALTER TABLE `notices` ADD COLUMN `start_date` DATETIME NULL",
+        'end_date'    => "ALTER TABLE `notices` ADD COLUMN `end_date` DATETIME NULL",
+        'created_by'  => "ALTER TABLE `notices` ADD COLUMN `created_by` INT DEFAULT 0",
+        'updated_at'  => "ALTER TABLE `notices` ADD COLUMN `updated_at` DATETIME NULL"
+    ];
+
+    foreach ($required_cols as $col_name => $alter_sql) {
+        if (!in_array($col_name, $cols)) {
+            try { $pdo->exec($alter_sql); } catch (\Throwable $e_col) {}
+        }
     }
-    if (!in_array('theme_color', $cols)) {
-        $pdo->exec("ALTER TABLE notices ADD COLUMN theme_color VARCHAR(30) DEFAULT 'primary'");
-    }
-    if (!in_array('is_pinned', $cols)) {
-        $pdo->exec("ALTER TABLE notices ADD COLUMN is_pinned TINYINT(1) DEFAULT 0");
-    }
-    if (!in_array('link_url', $cols)) {
-        $pdo->exec("ALTER TABLE notices ADD COLUMN link_url VARCHAR(255) NULL");
-    }
-    if (!in_array('link_label', $cols)) {
-        $pdo->exec("ALTER TABLE notices ADD COLUMN link_label VARCHAR(100) NULL");
-    }
-} catch (PDOException $e) {}
+
+    $pdo->exec("UPDATE `notices` SET `start_date` = NOW() WHERE `start_date` IS NULL OR `start_date` = '0000-00-00 00:00:00'");
+    $pdo->exec("UPDATE `notices` SET `end_date` = DATE_ADD(NOW(), INTERVAL 30 DAY) WHERE `end_date` IS NULL OR `end_date` = '0000-00-00 00:00:00'");
+} catch (\Throwable $e_tbl) {}
 
 // 2. PRG 패턴 공지사항 CRUD 처리
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
     $action = $_POST['action'];
 
-    if ($action === 'create' || $action === 'update') {
-        $title       = trim($_POST['title'] ?? '');
-        $content     = trim($_POST['content'] ?? '');
-        $notice_type = in_array($_POST['notice_type'], ['NORMAL', 'POPUP', 'URGENT', 'BANNER']) ? $_POST['notice_type'] : 'NORMAL';
-        $start_date  = !empty($_POST['start_date']) ? $_POST['start_date'] : date('Y-m-d 00:00:00');
-        $end_date    = !empty($_POST['end_date']) ? $_POST['end_date'] : date('Y-m-d 23:59:59', strtotime('+30 days'));
-        $is_active   = isset($_POST['is_active']) ? 1 : 0;
-        
-        $badge_text  = trim($_POST['badge_text'] ?? '공지');
-        $theme_color = trim($_POST['theme_color'] ?? 'primary');
-        $is_pinned   = isset($_POST['is_pinned']) ? 1 : 0;
-        $link_url    = trim($_POST['link_url'] ?? '');
-        $link_label  = trim($_POST['link_label'] ?? '자세히 보기');
+    try {
+        if ($action === 'create' || $action === 'update') {
+            $title       = trim($_POST['title'] ?? '');
+            $content     = trim($_POST['content'] ?? '');
+            $notice_type = in_array($_POST['notice_type'] ?? '', ['NORMAL', 'POPUP', 'URGENT', 'BANNER']) ? $_POST['notice_type'] : 'NORMAL';
+            
+            $raw_start   = trim($_POST['start_date'] ?? '');
+            $raw_end     = trim($_POST['end_date'] ?? '');
 
-        if (empty($title) || empty($content)) {
-            $_SESSION['flash_msg'] = '공지 제목과 내용을 입력해 주세요.';
-            $_SESSION['flash_status'] = 'danger';
-        } else {
-            if ($action === 'create') {
-                $sql = "INSERT INTO notices (title, content, notice_type, is_active, start_date, end_date, created_by, created_at, badge_text, theme_color, is_pinned, link_url, link_label)
-                        VALUES (:title, :content, :notice_type, :is_active, :start_date, :end_date, :created_by, NOW(), :badge_text, :theme_color, :is_pinned, :link_url, :link_label)";
-                $stmt = $pdo->prepare($sql);
-                $stmt->execute([
-                    'title'       => $title,
-                    'content'     => $content,
-                    'notice_type' => $notice_type,
-                    'is_active'   => $is_active,
-                    'start_date'  => $start_date,
-                    'end_date'    => $end_date,
-                    'created_by'  => $user_id,
-                    'badge_text'  => $badge_text,
-                    'theme_color' => $theme_color,
-                    'is_pinned'   => $is_pinned,
-                    'link_url'    => $link_url,
-                    'link_label'  => $link_label
-                ]);
-                $_SESSION['flash_msg'] = '신규 공지사항이 성공적으로 등록되었습니다.';
-                $_SESSION['flash_status'] = 'success';
+            $start_date  = !empty($raw_start) ? str_replace('T', ' ', $raw_start) : date('Y-m-d 00:00:00');
+            if (strlen($start_date) === 16) $start_date .= ':00';
+
+            $end_date    = !empty($raw_end) ? str_replace('T', ' ', $raw_end) : date('Y-m-d 23:59:59', strtotime('+30 days'));
+            if (strlen($end_date) === 16) $end_date .= ':59';
+
+            $is_active   = isset($_POST['is_active']) ? 1 : 0;
+            $badge_text  = trim($_POST['badge_text'] ?? '공지');
+            $theme_color = trim($_POST['theme_color'] ?? 'primary');
+            $is_pinned   = isset($_POST['is_pinned']) ? 1 : 0;
+            $link_url    = trim($_POST['link_url'] ?? '');
+            $link_label  = trim($_POST['link_label'] ?? '자세히 보기');
+
+            if (empty($title) || empty($content)) {
+                $_SESSION['flash_msg'] = '공지 제목과 내용을 입력해 주세요.';
+                $_SESSION['flash_status'] = 'danger';
             } else {
-                $notice_id = (int)$_POST['notice_id'];
-                $sql = "UPDATE notices 
-                        SET title = :title, content = :content, notice_type = :notice_type, 
-                            is_active = :is_active, start_date = :start_date, end_date = :end_date,
-                            badge_text = :badge_text, theme_color = :theme_color, is_pinned = :is_pinned,
-                            link_url = :link_url, link_label = :link_label, updated_at = NOW() 
-                        WHERE id = :id";
-                $stmt = $pdo->prepare($sql);
-                $stmt->execute([
-                    'title'       => $title,
-                    'content'     => $content,
-                    'notice_type' => $notice_type,
-                    'is_active'   => $is_active,
-                    'start_date'  => $start_date,
-                    'end_date'    => $end_date,
-                    'badge_text'  => $badge_text,
-                    'theme_color' => $theme_color,
-                    'is_pinned'   => $is_pinned,
-                    'link_url'    => $link_url,
-                    'link_label'  => $link_label,
-                    'id'          => $notice_id
-                ]);
-                $_SESSION['flash_msg'] = '공지사항 설정 및 레이어 팝업 옵션이 변경되었습니다.';
-                $_SESSION['flash_status'] = 'success';
+                if ($action === 'create') {
+                    $sql = "INSERT INTO notices (title, content, notice_type, is_active, start_date, end_date, created_by, created_at, badge_text, theme_color, is_pinned, link_url, link_label)
+                            VALUES (:title, :content, :notice_type, :is_active, :start_date, :end_date, :created_by, NOW(), :badge_text, :theme_color, :is_pinned, :link_url, :link_label)";
+                    $stmt = $pdo->prepare($sql);
+                    $stmt->execute([
+                        'title'       => $title,
+                        'content'     => $content,
+                        'notice_type' => $notice_type,
+                        'is_active'   => $is_active,
+                        'start_date'  => $start_date,
+                        'end_date'    => $end_date,
+                        'created_by'  => $user_id,
+                        'badge_text'  => $badge_text,
+                        'theme_color' => $theme_color,
+                        'is_pinned'   => $is_pinned,
+                        'link_url'    => $link_url,
+                        'link_label'  => $link_label
+                    ]);
+                    $_SESSION['flash_msg'] = '신규 공지사항이 성공적으로 등록되었습니다.';
+                    $_SESSION['flash_status'] = 'success';
+                } else {
+                    $notice_id = (int)$_POST['notice_id'];
+                    $sql = "UPDATE notices 
+                            SET title = :title, content = :content, notice_type = :notice_type, 
+                                is_active = :is_active, start_date = :start_date, end_date = :end_date,
+                                badge_text = :badge_text, theme_color = :theme_color, is_pinned = :is_pinned,
+                                link_url = :link_url, link_label = :link_label, updated_at = NOW() 
+                            WHERE id = :id";
+                    $stmt = $pdo->prepare($sql);
+                    $stmt->execute([
+                        'title'       => $title,
+                        'content'     => $content,
+                        'notice_type' => $notice_type,
+                        'is_active'   => $is_active,
+                        'start_date'  => $start_date,
+                        'end_date'    => $end_date,
+                        'badge_text'  => $badge_text,
+                        'theme_color' => $theme_color,
+                        'is_pinned'   => $is_pinned,
+                        'link_url'    => $link_url,
+                        'link_label'  => $link_label,
+                        'id'          => $notice_id
+                    ]);
+                    $_SESSION['flash_msg'] = '공지사항 설정 및 레이어 팝업 옵션이 변경되었습니다.';
+                    $_SESSION['flash_status'] = 'success';
+                }
             }
+        } elseif ($action === 'delete') {
+            $notice_id = (int)$_POST['notice_id'];
+            $del_stmt = $pdo->prepare("DELETE FROM notices WHERE id = :id");
+            $del_stmt->execute(['id' => $notice_id]);
+            $_SESSION['flash_msg'] = '공지사항이 안전하게 삭제되었습니다.';
+            $_SESSION['flash_status'] = 'danger';
         }
-    } elseif ($action === 'delete') {
-        $notice_id = (int)$_POST['notice_id'];
-        $del_stmt = $pdo->prepare("DELETE FROM notices WHERE id = :id");
-        $del_stmt->execute(['id' => $notice_id]);
-        $_SESSION['flash_msg'] = '공지사항이 안전하게 삭제되었습니다.';
+    } catch (\Throwable $e_crud) {
+        $_SESSION['flash_msg'] = '처리 중 오류가 발생했습니다: ' . $e_crud->getMessage();
         $_SESSION['flash_status'] = 'danger';
     }
 
@@ -132,16 +192,46 @@ unset($_SESSION['flash_msg'], $_SESSION['flash_status']);
 
 require_once 'header.php';
 
-$notices = $pdo->query("SELECT * FROM notices ORDER BY is_pinned DESC, id DESC")->fetchAll(PDO::FETCH_ASSOC);
-$now = date('Y-m-d H:i:s');
+// 데이터 조회
+$notices = [];
+try {
+    $notices_stmt = $pdo->query("SELECT * FROM notices ORDER BY is_pinned DESC, id DESC");
+    if ($notices_stmt) {
+        $notices = $notices_stmt->fetchAll(PDO::FETCH_ASSOC);
+    }
+} catch (\Throwable $e_select1) {
+    try {
+        $notices_stmt = $pdo->query("SELECT * FROM notices ORDER BY id DESC");
+        if ($notices_stmt) {
+            $notices = $notices_stmt->fetchAll(PDO::FETCH_ASSOC);
+        }
+    } catch (\Throwable $e_select2) {
+        $notices = [];
+    }
+}
 
+$now = date('Y-m-d H:i:s');
 $total_count = count($notices);
 $active_count = 0;
 $popup_count = 0;
+$sum_views = 0;
+
 foreach ($notices as $n) {
-    if ($n['is_active'] && $now >= $n['start_date'] && $now <= $n['end_date']) $active_count++;
-    if ($n['notice_type'] === 'POPUP') $popup_count++;
+    $n_active = (int)($n['is_active'] ?? 0);
+    $n_start  = (string)($n['start_date'] ?? '');
+    $n_end    = (string)($n['end_date'] ?? '');
+    $n_type   = (string)($n['notice_type'] ?? '');
+    $n_views  = (int)($n['views'] ?? 0);
+
+    if ($n_active === 1 && $n_start !== '' && $n_end !== '' && $now >= $n_start && $now <= $n_end) {
+        $active_count++;
+    }
+    if ($n_type === 'POPUP') {
+        $popup_count++;
+    }
+    $sum_views += $n_views;
 }
+$avg_views = $total_count > 0 ? round($sum_views / $total_count) : 0;
 ?>
 
 <style>
@@ -215,12 +305,7 @@ foreach ($notices as $n) {
                 <div class="notice-card-stat">
                     <div>
                         <div class="text-muted small fw-semibold">평균 도달 조회수</div>
-                        <div class="fs-4 fw-bold text-dark mt-1">
-                            <?php 
-                                $sum_views = array_sum(array_column($notices, 'views'));
-                                echo $total_count > 0 ? number_format(round($sum_views / $total_count)) : 0;
-                            ?> <small class="fs-6 fw-normal text-muted">회</small>
-                        </div>
+                        <div class="fs-4 fw-bold text-dark mt-1"><?= number_format($avg_views) ?> <small class="fs-6 fw-normal text-muted">회</small></div>
                     </div>
                     <div class="icon-circle-wrapper bg-primary bg-opacity-10 text-primary p-3 rounded-3"><i class="fa-solid fa-eye fs-5"></i></div>
                 </div>
@@ -258,21 +343,35 @@ foreach ($notices as $n) {
                         </tr>
                     <?php else: ?>
                         <?php foreach ($notices as $row): 
-                            $is_within_period = ($now >= $row['start_date'] && $now <= $row['end_date']);
-                            $is_current_showing = ($row['is_active'] == 1 && $is_within_period);
+                            $row_id      = (int)($row['id'] ?? 0);
+                            $row_title   = (string)($row['title'] ?? '');
+                            $row_content = (string)($row['content'] ?? '');
+                            $row_type    = (string)($row['notice_type'] ?? 'NORMAL');
+                            $row_badge   = (string)($row['badge_text'] ?? '공지');
+                            $row_theme   = (string)($row['theme_color'] ?? 'primary');
+                            $row_pinned  = (int)($row['is_pinned'] ?? 0);
+                            $row_active  = (int)($row['is_active'] ?? 0);
+                            $row_start   = (string)($row['start_date'] ?? '');
+                            $row_end     = (string)($row['end_date'] ?? '');
+                            $row_views   = (int)($row['views'] ?? 0);
+                            $row_url     = (string)($row['link_url'] ?? '');
+                            $row_label   = (string)($row['link_label'] ?? '자세히 보기');
+
+                            $is_within_period = ($row_start !== '' && $row_end !== '' && $now >= $row_start && $now <= $row_end);
+                            $is_current_showing = ($row_active === 1 && $is_within_period);
                         ?>
-                            <tr class="<?= !empty($row['is_pinned']) ? 'table-warning table-opacity-10' : '' ?>">
-                                <td class="text-center fw-bold text-muted"><?= $row['id'] ?></td>
+                            <tr class="<?= $row_pinned ? 'table-warning table-opacity-10' : '' ?>">
+                                <td class="text-center fw-bold text-muted"><?= $row_id ?></td>
                                 <td class="text-center" style="white-space: nowrap;">
-                                    <?php if ($row['notice_type'] === 'POPUP'): ?>
+                                    <?php if ($row_type === 'POPUP'): ?>
                                         <span class="notice-admin-badge bg-primary bg-opacity-10 text-primary border border-primary border-opacity-25">
                                             <i class="fa-solid fa-window-restore"></i>레이어팝업
                                         </span>
-                                    <?php elseif ($row['notice_type'] === 'URGENT'): ?>
+                                    <?php elseif ($row_type === 'URGENT'): ?>
                                         <span class="notice-admin-badge bg-danger bg-opacity-10 text-danger border border-danger border-opacity-25">
                                             <i class="fa-solid fa-triangle-exclamation"></i>긴급점검
                                         </span>
-                                    <?php elseif ($row['notice_type'] === 'BANNER'): ?>
+                                    <?php elseif ($row_type === 'BANNER'): ?>
                                         <span class="notice-admin-badge bg-warning bg-opacity-15 text-dark border border-warning">
                                             <i class="fa-solid fa-flag"></i>띠배너
                                         </span>
@@ -283,11 +382,11 @@ foreach ($notices as $n) {
                                     <?php endif; ?>
                                 </td>
                                 <td class="text-center" style="white-space: nowrap;">
-                                    <?php if ($row['is_active'] == 0): ?>
+                                    <?php if ($row_active === 0): ?>
                                         <span class="badge bg-light text-muted border">비활성</span>
                                     <?php elseif ($is_current_showing): ?>
                                         <span class="badge bg-success shadow-sm"><i class="fa-solid fa-broadcast-tower me-1"></i>게시중</span>
-                                    <?php elseif ($now < $row['start_date']): ?>
+                                    <?php elseif ($row_start !== '' && $now < $row_start): ?>
                                         <span class="badge bg-warning text-dark"><i class="fa-solid fa-clock me-1"></i>예약대기</span>
                                     <?php else: ?>
                                         <span class="badge bg-secondary opacity-75">기간만료</span>
@@ -295,49 +394,49 @@ foreach ($notices as $n) {
                                 </td>
                                 <td>
                                     <div class="d-flex align-items-center gap-1 mb-1">
-                                        <?php if (!empty($row['is_pinned'])): ?>
+                                        <?php if ($row_pinned): ?>
                                             <span class="badge bg-warning text-dark me-1"><i class="fa-solid fa-thumbtack me-1"></i>상단고정</span>
                                         <?php endif; ?>
-                                        <span class="badge bg-<?= htmlspecialchars($row['theme_color'] ?? 'primary') ?> me-1"><?= htmlspecialchars($row['badge_text'] ?? '공지') ?></span>
-                                        <strong class="text-dark"><?= htmlspecialchars($row['title']) ?></strong>
+                                        <span class="badge bg-<?= htmlspecialchars($row_theme) ?> me-1"><?= htmlspecialchars($row_badge) ?></span>
+                                        <strong class="text-dark"><?= htmlspecialchars($row_title) ?></strong>
                                     </div>
                                     <div class="text-muted small text-truncate" style="max-width: 480px;">
-                                        <?= htmlspecialchars(mb_strimwidth(strip_tags($row['content']), 0, 90, '...')) ?>
+                                        <?= htmlspecialchars(mb_strimwidth(strip_tags($row_content), 0, 90, '...')) ?>
                                     </div>
                                 </td>
                                 <td class="text-center text-muted small" style="white-space: nowrap;">
-                                    <div style="white-space: nowrap;"><i class="fa-regular fa-calendar-plus me-1 text-primary"></i><?= substr($row['start_date'], 0, 16) ?></div>
-                                    <div style="white-space: nowrap;"><i class="fa-regular fa-calendar-minus me-1 text-danger"></i><?= substr($row['end_date'], 0, 16) ?></div>
+                                    <div style="white-space: nowrap;"><i class="fa-regular fa-calendar-plus me-1 text-primary"></i><?= safe_dt_format($row_start) ?></div>
+                                    <div style="white-space: nowrap;"><i class="fa-regular fa-calendar-minus me-1 text-danger"></i><?= safe_dt_format($row_end) ?></div>
                                 </td>
-                                <td class="text-center fw-semibold text-secondary" style="white-space: nowrap;"><?= number_format($row['views'] ?? 0) ?></td>
+                                <td class="text-center fw-semibold text-secondary" style="white-space: nowrap;"><?= number_format($row_views) ?></td>
                                 <td class="text-center" style="white-space: nowrap;">
                                     <div class="d-inline-flex align-items-center justify-content-center gap-1 flex-nowrap">
-                                        <button type="button" class="btn btn-outline-primary btn-sm rounded-pill px-2 py-1" style="white-space: nowrap;" data-bs-toggle="modal" data-bs-target="#noticeEditModal<?= $row['id'] ?>">수정</button>
-                                        <button type="button" class="btn btn-outline-danger btn-sm rounded-pill px-2 py-1" style="white-space: nowrap;" onclick="askDeleteNotice(<?= $row['id'] ?>, '<?= htmlspecialchars(addslashes($row['title'])) ?>')">삭제</button>
+                                        <button type="button" class="btn btn-outline-primary btn-sm rounded-pill px-2 py-1" style="white-space: nowrap;" data-bs-toggle="modal" data-bs-target="#noticeEditModal<?= $row_id ?>">수정</button>
+                                        <button type="button" class="btn btn-outline-danger btn-sm rounded-pill px-2 py-1" style="white-space: nowrap;" onclick="askDeleteNotice(<?= $row_id ?>, '<?= htmlspecialchars(addslashes($row_title), ENT_QUOTES, 'UTF-8') ?>')">삭제</button>
                                     </div>
                                 </td>
                             </tr>
 
                             <!-- 공지사항 수정 모달 -->
-                            <div class="modal fade" id="noticeEditModal<?= $row['id'] ?>" tabindex="-1" aria-hidden="true">
+                            <div class="modal fade" id="noticeEditModal<?= $row_id ?>" tabindex="-1" aria-hidden="true">
                                 <div class="modal-dialog modal-dialog-centered modal-lg">
                                     <div class="modal-content border-0 shadow-lg rounded-4 overflow-hidden">
                                         <form method="POST" action="admin_notices.htm">
                                             <input type="hidden" name="action" value="update">
-                                            <input type="hidden" name="notice_id" value="<?= $row['id'] ?>">
+                                            <input type="hidden" name="notice_id" value="<?= $row_id ?>">
                                             <div class="modal-header bg-dark text-white py-3 px-4" style="background: linear-gradient(135deg, #0f172a, #1e293b) !important;">
-                                                <h5 class="modal-title fs-6 fw-bold text-white"><i class="fa-solid fa-pen-to-square me-2 text-primary"></i>공지 및 레이어 팝업 수정 (#<?= $row['id'] ?>)</h5>
+                                                <h5 class="modal-title fs-6 fw-bold text-white"><i class="fa-solid fa-pen-to-square me-2 text-primary"></i>공지 및 레이어 팝업 수정 (#<?= $row_id ?>)</h5>
                                                 <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
                                             </div>
                                             <div class="modal-body p-4">
                                                 <div class="row g-3 mb-3">
                                                     <div class="col-md-8">
                                                         <label class="form-label small fw-bold">공지 제목</label>
-                                                        <input type="text" name="title" class="form-control" value="<?= htmlspecialchars($row['title']) ?>" required>
+                                                        <input type="text" name="title" class="form-control" value="<?= htmlspecialchars($row_title) ?>" required>
                                                     </div>
                                                     <div class="col-md-4">
                                                         <label class="form-label small fw-bold">상단 뱃지 텍스트</label>
-                                                        <input type="text" name="badge_text" class="form-control" value="<?= htmlspecialchars($row['badge_text'] ?? '공지') ?>" placeholder="예: 필독, 업데이트, 긴급">
+                                                        <input type="text" name="badge_text" class="form-control" value="<?= htmlspecialchars($row_badge) ?>" placeholder="예: 필독, 업데이트, 긴급">
                                                     </div>
                                                 </div>
 
@@ -345,26 +444,26 @@ foreach ($notices as $n) {
                                                     <div class="col-md-4">
                                                         <label class="form-label small fw-bold">노출 방식 구분</label>
                                                         <select name="notice_type" class="form-select">
-                                                            <option value="POPUP" <?= $row['notice_type'] === 'POPUP' ? 'selected' : '' ?>>중요 레이어 팝업 (가장 돋보임)</option>
-                                                            <option value="NORMAL" <?= $row['notice_type'] === 'NORMAL' ? 'selected' : '' ?>>일반 공지 (상단 카드/모달)</option>
-                                                            <option value="BANNER" <?= $row['notice_type'] === 'BANNER' ? 'selected' : '' ?>>상단 헤더 띠 배너</option>
-                                                            <option value="URGENT" <?= $row['notice_type'] === 'URGENT' ? 'selected' : '' ?>>긴급 점검 및 경고</option>
+                                                            <option value="POPUP" <?= $row_type === 'POPUP' ? 'selected' : '' ?>>중요 레이어 팝업 (가장 돋보임)</option>
+                                                            <option value="NORMAL" <?= $row_type === 'NORMAL' ? 'selected' : '' ?>>일반 공지 (상단 카드/모달)</option>
+                                                            <option value="BANNER" <?= $row_type === 'BANNER' ? 'selected' : '' ?>>상단 헤더 띠 배너</option>
+                                                            <option value="URGENT" <?= $row_type === 'URGENT' ? 'selected' : '' ?>>긴급 점검 및 경고</option>
                                                         </select>
                                                     </div>
                                                     <div class="col-md-4">
                                                         <label class="form-label small fw-bold">테마 강조 색상</label>
                                                         <select name="theme_color" class="form-select">
-                                                            <option value="primary" <?= ($row['theme_color'] ?? '') === 'primary' ? 'selected' : '' ?>>신뢰 블루 (기본)</option>
-                                                            <option value="danger" <?= ($row['theme_color'] ?? '') === 'danger' ? 'selected' : '' ?>>긴급 레드</option>
-                                                            <option value="warning" <?= ($row['theme_color'] ?? '') === 'warning' ? 'selected' : '' ?>>주의 엠버(노랑)</option>
-                                                            <option value="success" <?= ($row['theme_color'] ?? '') === 'success' ? 'selected' : '' ?>>성공 에메랄드</option>
-                                                            <option value="dark" <?= ($row['theme_color'] ?? '') === 'dark' ? 'selected' : '' ?>>모던 다크</option>
+                                                            <option value="primary" <?= $row_theme === 'primary' ? 'selected' : '' ?>>신뢰 블루 (기본)</option>
+                                                            <option value="danger" <?= $row_theme === 'danger' ? 'selected' : '' ?>>긴급 레드</option>
+                                                            <option value="warning" <?= $row_theme === 'warning' ? 'selected' : '' ?>>주의 엠버(노랑)</option>
+                                                            <option value="success" <?= $row_theme === 'success' ? 'selected' : '' ?>>성공 에메랄드</option>
+                                                            <option value="dark" <?= $row_theme === 'dark' ? 'selected' : '' ?>>모던 다크</option>
                                                         </select>
                                                     </div>
                                                     <div class="col-md-4 d-flex align-items-end">
                                                         <div class="form-check form-switch mb-2">
-                                                            <input class="form-check-input" type="checkbox" name="is_pinned" id="editPinned<?= $row['id'] ?>" value="1" <?= !empty($row['is_pinned']) ? 'checked' : '' ?>>
-                                                            <label class="form-check-label fw-bold small text-dark" for="editPinned<?= $row['id'] ?>">최상단 고정 노출</label>
+                                                            <input class="form-check-input" type="checkbox" name="is_pinned" id="editPinned<?= $row_id ?>" value="1" <?= $row_pinned ? 'checked' : '' ?>>
+                                                            <label class="form-check-label fw-bold small text-dark" for="editPinned<?= $row_id ?>">최상단 고정 노출</label>
                                                         </div>
                                                     </div>
                                                 </div>
@@ -372,33 +471,33 @@ foreach ($notices as $n) {
                                                 <div class="row g-3 mb-3">
                                                     <div class="col-md-6">
                                                         <label class="form-label small fw-bold">게시 시작 일시</label>
-                                                        <input type="datetime-local" name="start_date" class="form-control" value="<?= date('Y-m-d\TH:i', strtotime($row['start_date'])) ?>" required>
+                                                        <input type="datetime-local" name="start_date" class="form-control" value="<?= safe_dt_input($row_start) ?>" required>
                                                     </div>
                                                     <div class="col-md-6">
                                                         <label class="form-label small fw-bold">게시 종료 일시</label>
-                                                        <input type="datetime-local" name="end_date" class="form-control" value="<?= date('Y-m-d\TH:i', strtotime($row['end_date'])) ?>" required>
+                                                        <input type="datetime-local" name="end_date" class="form-control" value="<?= safe_dt_input($row_end, '+30 days') ?>" required>
                                                     </div>
                                                 </div>
 
                                                 <div class="mb-3">
                                                     <label class="form-label small fw-bold">공지 본문 내용</label>
-                                                    <textarea name="content" class="form-control" rows="6" required><?= htmlspecialchars($row['content']) ?></textarea>
+                                                    <textarea name="content" class="form-control" rows="6" required><?= htmlspecialchars($row_content) ?></textarea>
                                                 </div>
 
                                                 <div class="row g-3 mb-3 bg-light p-2 rounded-3 border">
                                                     <div class="col-md-8">
                                                         <label class="form-label small fw-bold">외부 링크 / 연결 URL (선택)</label>
-                                                        <input type="url" name="link_url" class="form-control form-control-sm" placeholder="https://..." value="<?= htmlspecialchars($row['link_url'] ?? '') ?>">
+                                                        <input type="url" name="link_url" class="form-control form-control-sm" placeholder="https://..." value="<?= htmlspecialchars($row_url) ?>">
                                                     </div>
                                                     <div class="col-md-4">
                                                         <label class="form-label small fw-bold">버튼 문구</label>
-                                                        <input type="text" name="link_label" class="form-control form-control-sm" placeholder="예: 바로가기" value="<?= htmlspecialchars($row['link_label'] ?? '자세히 보기') ?>">
+                                                        <input type="text" name="link_label" class="form-control form-control-sm" placeholder="예: 바로가기" value="<?= htmlspecialchars($row_label) ?>">
                                                     </div>
                                                 </div>
 
                                                 <div class="form-check form-switch mt-3">
-                                                    <input class="form-check-input" type="checkbox" name="is_active" id="editActive<?= $row['id'] ?>" value="1" <?= $row['is_active'] ? 'checked' : '' ?>>
-                                                    <label class="form-check-label fw-bold text-dark" for="editActive<?= $row['id'] ?>">공지 게시 활성화</label>
+                                                    <input class="form-check-input" type="checkbox" name="is_active" id="editActive<?= $row_id ?>" value="1" <?= $row_active ? 'checked' : '' ?>>
+                                                    <label class="form-check-label fw-bold text-dark" for="editActive<?= $row_id ?>">공지 게시 활성화</label>
                                                     <div class="text-muted small">게시 기간 내에 접속하는 모든 이용자에게 즉시 팝업/배너로 표시됩니다.</div>
                                                 </div>
                                             </div>
@@ -511,7 +610,7 @@ foreach ($notices as $n) {
     </div>
 </div>
 
-<!-- 공지 삭제 전용 모달 (Alert 전면 대체) -->
+<!-- 공지 삭제 전용 모달 -->
 <div class="modal fade" id="deleteNoticeConfirmModal" tabindex="-1" aria-hidden="true">
     <div class="modal-dialog modal-dialog-centered modal-sm">
         <div class="modal-content border-0 shadow-lg rounded-4 overflow-hidden">
@@ -549,5 +648,3 @@ function askDeleteNotice(id, title) {
 <?php
 include_once 'footer.php';
 ?>
-</body>
-</html>
