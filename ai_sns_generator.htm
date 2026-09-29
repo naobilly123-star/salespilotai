@@ -89,6 +89,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['generate_sns'])) {
         exit();
     }
 
+    // [중복/연타 생성 방지 가드] 최소 10초 쿨다운 검증
+    $cooldown_seconds = 10;
+    $last_gen_time = $_SESSION['last_sns_gen_time'] ?? 0;
+    $current_time = time();
+    if (($current_time - $last_gen_time) < $cooldown_seconds) {
+        $remaining = $cooldown_seconds - ($current_time - $last_gen_time);
+        $_SESSION['flash_err'] = "SNS 문구 생성이 너무 빠르게 요청되었습니다. 안정적인 처리를 위해 {$remaining}초 후 다시 시도해 주세요.";
+        header("Location: ai_sns_generator.htm");
+        exit();
+    }
+    $_SESSION['last_sns_gen_time'] = $current_time;
+
     $platform = $_POST['platform'] ?? 'instagram';
     $tone = $_POST['tone'] ?? 'friendly';
     $keywords = trim($_POST['keywords'] ?? '신메뉴 출시 할인 이벤트');
@@ -125,7 +137,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['generate_sns'])) {
         }
     } catch (PDOException $e) {}
 
-    $default_key = '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';
+    $default_key = '';
     $api_key = !empty($db_setting_key) ? $db_setting_key : (getenv('OPENAI_API_KEY') ?: ($_ENV['OPENAI_API_KEY'] ?? $default_key));
 
     if (!empty($api_key)) {
@@ -339,7 +351,7 @@ if (!empty($latest_copy)) {
     <div class="col-md-5">
         <div class="glass-card p-4">
             <h5 class="fw-bold mb-3"><i class="fa-solid fa-wand-magic-sparkles text-primary me-2"></i>생성 옵션</h5>
-            <form id="snsForm" method="POST" action="ai_sns_generator.htm" onsubmit="showLoading();">
+            <form id="snsForm" method="POST" action="ai_sns_generator.htm" onsubmit="return handleSnsSubmit(event);">
                 <input type="hidden" name="generate_sns" value="1">
                 
                 <div class="mb-3">
@@ -366,7 +378,7 @@ if (!empty($latest_copy)) {
                 </div>
 
                 <?php if ($user_role !== 'USER'): ?>
-                    <button type="submit" class="btn btn-success w-100 fw-bold py-2 shadow-sm rounded-pill mt-2">
+                    <button type="submit" id="btnSnsSubmit" class="btn btn-success w-100 fw-bold py-2 shadow-sm rounded-pill mt-2">
                         <i class="fa-solid fa-bolt me-1"></i>AI 홍보문구 생성하기
                     </button>
                 <?php else: ?>
@@ -510,8 +522,21 @@ if (!empty($latest_copy)) {
 </div>
 
 <script>
-function showLoading() {
+let isSnsSubmitting = false;
+
+function handleSnsSubmit(event) {
+    if (isSnsSubmitting) {
+        event.preventDefault();
+        return false;
+    }
+    isSnsSubmitting = true;
+    const btn = document.getElementById('btnSnsSubmit');
+    if (btn) {
+        btn.disabled = true;
+        btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin me-1"></i>AI 작성 중...';
+    }
     document.getElementById('loadingOverlay').style.display = 'flex';
+    return true;
 }
 
 function copyToClipboard(elementId, btnElement) {

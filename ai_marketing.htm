@@ -17,6 +17,11 @@ if (!$user_id) {
 
 $user_role = $_SESSION['role'] ?? 'USER';
 
+/* CSRF 및 중복 폼 전송 방지 토큰 생성 */
+if (empty($_SESSION['mkt_token'])) {
+    $_SESSION['mkt_token'] = bin2hex(random_bytes(16));
+}
+
 /* 세션 알림 메시지 확인 및 초기화 */
 $flash_msg = $_SESSION['flash_msg'] ?? '';
 $flash_err = $_SESSION['flash_err'] ?? '';
@@ -72,12 +77,35 @@ $is_generated = isset($_GET['success']) && $_GET['success'] == '1';
 $new_generated_id = isset($_GET['new_id']) ? intval($_GET['new_id']) : 0;
 
 // 3. AI 맞춤 마케팅 전략 생성 요청 처리
-if (isset($_POST['generate_ai'])) {
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && (isset($_POST['generate_ai']) || (isset($_POST['action_mode']) && $_POST['action_mode'] === 'generate_ai'))) {
     if ($user_role === 'USER') {
         $_SESSION['flash_err'] = '전략 생성 권한이 없습니다. 사업자회원 승인 후 이용 가능합니다.';
         header("Location: ai_marketing.htm");
         exit();
     }
+
+    // 중복 전송 방지 검증 (CSRF 토큰 불일치 또는 새로고침 중복 방지)
+    $posted_token = $_POST['mkt_token'] ?? '';
+    if (empty($posted_token) || $posted_token !== $_SESSION['mkt_token']) {
+        header("Location: ai_marketing.htm");
+        exit();
+    }
+
+    // [강력 쿨다운 방어: 30초 내 재호출 원천 차단]
+    $cooldown_limit = 30; 
+    $last_time = $_SESSION['last_marketing_time'] ?? 0;
+    $now = time();
+    $elapsed = $now - $last_time;
+    if ($elapsed < $cooldown_limit) {
+        $remaining = $cooldown_limit - $elapsed;
+        $_SESSION['flash_err'] = "AI 전략 생성이 이미 완료되었습니다. 과부하 및 토큰 남용 방지를 위해 {$remaining}초 후에 다시 생성할 수 있습니다.";
+        header("Location: ai_marketing.htm");
+        exit();
+    }
+
+    // 일회성 토큰 재생성 및 최종 호출 시각 기록
+    $_SESSION['mkt_token'] = bin2hex(random_bytes(16));
+    $_SESSION['last_marketing_time'] = $now;
 
     $rent = 1500000;
     $labor = 2500000;
@@ -103,7 +131,7 @@ if (isset($_POST['generate_ai'])) {
         }
     } catch (PDOException $e) {}
 
-    $default_key = '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';
+    $default_key = '';
     $api_key = !empty($db_setting_key) ? $db_setting_key : (getenv('OPENAI_API_KEY') ?: ($_ENV['OPENAI_API_KEY'] ?? $default_key));
 
     $ai_strategies = [
@@ -219,6 +247,12 @@ require_once 'header.php';
 $stmt = $pdo->prepare("SELECT * FROM ai_recommendations WHERE user_id = ? ORDER BY id DESC");
 $stmt->execute([$user_id]);
 $recs = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+// 남은 쿨다운 시간(초) 계산
+$current_time_calc = time();
+$last_call_time = $_SESSION['last_marketing_time'] ?? 0;
+$time_diff = $current_time_calc - $last_call_time;
+$server_remaining_cooldown = ($time_diff < 30) ? (30 - $time_diff) : 0;
 ?>
 
 <style>
@@ -226,6 +260,7 @@ $recs = $stmt->fetchAll(PDO::FETCH_ASSOC);
         font-size: clamp(0.875rem, 1.2vw, 1rem) !important;
         padding: 0.6rem 1.4rem !important;
         border-radius: 50rem !important;
+        transition: all 0.25s ease;
     }
     .card-title-responsive {
         font-size: clamp(0.95rem, 1.15vw, 1.05rem);
@@ -334,7 +369,7 @@ $recs = $stmt->fetchAll(PDO::FETCH_ASSOC);
         <?php if ($flash_msg === 'deleted' || $flash_msg === 'batch_deleted'): ?>
             선택하신 마케팅 추천 전략이 성공적으로 삭제되었습니다.
         <?php elseif ($flash_msg === 'generated'): ?>
-            매장 원가 분석에 기반한 새로운 맞춤형 마케팅 전략이 성공적으로 등록되었습니다!
+            매장 원가 분석에 기반한 새로운 맞춤형 마케팅 전략이 성공적으로 등록되었습니다! (과도한 중복 생성 방지를 위해 30초 쿨다운이 적용됩니다.)
         <?php endif; ?>
         <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
     </div>
@@ -347,8 +382,10 @@ $recs = $stmt->fetchAll(PDO::FETCH_ASSOC);
     </div>
 <?php endif; ?>
 
-<form id="marketingForm" method="POST" action="ai_marketing.htm" onsubmit="checkAndShowLoading(event);">
+<form id="marketingForm" method="POST" action="ai_marketing.htm" onsubmit="return checkAndShowLoading(event);">
 <input type="hidden" name="delete_selected" id="deleteSelectedInput" value="0">
+<input type="hidden" name="action_mode" id="actionModeInput" value="">
+<input type="hidden" name="mkt_token" value="<?= htmlspecialchars($_SESSION['mkt_token']) ?>">
 
 <div class="row mb-4 bg-white py-3 px-2 rounded-3 shadow-sm border align-items-center">
     <div class="col-md-6 d-flex align-items-center gap-2 mb-2 mb-md-0">
@@ -365,8 +402,8 @@ $recs = $stmt->fetchAll(PDO::FETCH_ASSOC);
     
     <div class="col-md-6 text-end">
 		<?php if ($user_role !== 'USER'): ?>
-			<button type="submit" name="generate_ai" class="btn btn-success shadow-sm btn-ai-generate">
-                <i class="fa-solid fa-wand-magic-sparkles me-1"></i>AI 맞춤 마케팅 전략 생성하기
+			<button type="submit" name="generate_ai" id="btnMarketingGenerate" class="btn btn-success shadow-sm btn-ai-generate">
+                <i class="fa-solid fa-wand-magic-sparkles me-1"></i><span id="btnMarketingGenerateText">AI 맞춤 마케팅 전략 생성하기</span>
             </button>
 		<?php else: ?>
 			<div class="alert alert-info py-2 mb-0 small text-start">
@@ -526,6 +563,9 @@ $recs = $stmt->fetchAll(PDO::FETCH_ASSOC);
 </div>
 
 <script>
+let isMarketingProcessing = false;
+let cooldownSeconds = <?= (int)$server_remaining_cooldown ?>;
+
 function toggleSelectAll(source) {
     const checkboxes = document.querySelectorAll('.rec-checkbox');
     checkboxes.forEach(cb => cb.checked = source.checked);
@@ -558,10 +598,45 @@ function executeBatchDelete() {
 }
 
 function checkAndShowLoading(event) {
-    const submitter = event.submitter;
-    if (submitter && submitter.name === 'generate_ai') {
-        document.getElementById('loadingOverlay').style.display = 'flex';
+    if (cooldownSeconds > 0) {
+        alert('이전 AI 전략 분석 후 쿨다운 진행 중입니다. (' + cooldownSeconds + '초 후 다시 생성 가능)');
+        event.preventDefault();
+        return false;
     }
+
+    if (isMarketingProcessing) {
+        event.preventDefault();
+        return false;
+    }
+
+    isMarketingProcessing = true;
+    document.getElementById('actionModeInput').value = 'generate_ai';
+    document.getElementById('loadingOverlay').style.display = 'flex';
+    return true;
+}
+
+function startCooldownTimer(seconds) {
+    const btn = document.getElementById('btnMarketingGenerate');
+    const textSpan = document.getElementById('btnMarketingGenerateText');
+    if (!btn || !textSpan) return;
+
+    cooldownSeconds = seconds;
+    btn.disabled = true;
+    btn.classList.remove('btn-success');
+    btn.classList.add('btn-secondary');
+
+    const timerInterval = setInterval(function() {
+        if (cooldownSeconds <= 0) {
+            clearInterval(timerInterval);
+            btn.disabled = false;
+            btn.classList.remove('btn-secondary');
+            btn.classList.add('btn-success');
+            textSpan.innerText = 'AI 맞춤 마케팅 전략 생성하기';
+        } else {
+            textSpan.innerText = '재생성 대기 중 (' + cooldownSeconds + '초)';
+            cooldownSeconds--;
+        }
+    }, 1000);
 }
 
 function copyStrategyText(srcId, btnEl) {
@@ -603,11 +678,14 @@ function fallbackCopy(text, callback) {
     }
     document.body.removeChild(temp);
 }
-</script>
 
-<?php if ($is_generated): ?>
-<script>
 document.addEventListener("DOMContentLoaded", function() {
+    // 서버에서 남은 쿨다운이 있거나 방금 생성된 직후인 경우 타이머 가동
+    if (cooldownSeconds > 0) {
+        startCooldownTimer(cooldownSeconds);
+    }
+
+    <?php if ($is_generated): ?>
     const latestItem = document.getElementById("latest-data");
     if (latestItem) {
         const offset = 100;
@@ -625,9 +703,9 @@ document.addEventListener("DOMContentLoaded", function() {
     if (window.history.replaceState) {
         window.history.replaceState(null, null, window.location.pathname);
     }
+    <?php endif; ?>
 });
 </script>
-<?php endif; ?>
 
 <?php
 include_once 'footer.php';
